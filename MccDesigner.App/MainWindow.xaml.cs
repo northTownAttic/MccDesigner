@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        StateChanged += (_, _) => { if (WindowState == WindowState.Normal) WindowState = WindowState.Maximized; };
         vm = new MainViewModel();
         DataContext = vm;
         TimelineScrollViewer.ScrollChanged += (_, e) => {
@@ -46,6 +47,8 @@ public partial class MainWindow : Window
         Loaded += (_, _) => { ResizeMachineCanvas(); CenterMachineCanvas(); DrawAll(); };
         SizeChanged += (_, _) => DrawAll();
     }
+    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
     private void OperationsGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (committingEdit || e.EditAction != DataGridEditAction.Commit) return;
