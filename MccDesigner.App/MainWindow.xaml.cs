@@ -286,20 +286,24 @@ public partial class MainWindow : Window
         {
             var y = settings.ScanY(lane);
             var position = lane == MachineAxes.Stage1 ? state.Stage1X : state.Stage2X;
-            Box(settings.StageXMin, settings.StageXMax, y - map.LaneHalfHeight, y + map.LaneHalfHeight,
-                lane == MachineAxes.Stage1 ? "#CCFBF1" : "#FEF3C7", .8);
-            Line(MachineCanvas, map.X(settings.StageXMin), map.Y(y), map.X(settings.StageXMax), map.Y(y), "#94A3B8", 1);
-            Box(position - map.MarkerWidth / 2, position + map.MarkerWidth / 2,
-                y - map.LaneHalfHeight * .7, y + map.LaneHalfHeight * .7,
-                lane == MachineAxes.Stage1 ? "#0D9488" : "#D97706", 1);
-            Text(MachineCanvas, $"{lane}\nY={y:0.###}", 2 * zoom, map.Y(y) - 10 * zoom, "#0F172A", 9 * zoom, 62 * zoom);
+            var rail = MachineGeometry.Rail(settings, lane);
+            var stage = MachineGeometry.Stage(settings, lane, position);
+            var railName = lane == MachineAxes.Stage1 ? "Rail 1" : "Rail 2";
+            Box(rail.XStart, rail.XEnd, rail.YStart, rail.YEnd, "#CBD5E1", 1, railName);
+            Line(MachineCanvas, map.X(rail.XStart), map.Y(y), map.X(rail.XEnd), map.Y(y), "#64748B", 1);
+            Box(stage.XStart, stage.XEnd, stage.YStart, stage.YEnd,
+                lane == MachineAxes.Stage1 ? "#0D9488" : "#D97706", 1, lane);
+            Line(MachineCanvas, map.X(position), map.Y(stage.YStart), map.X(position), map.Y(stage.YEnd), "White", 1);
+            Text(MachineCanvas, $"{railName}\nY={y:0.###}", 2 * zoom, map.Y(y) - 10 * zoom, "#0F172A", 9 * zoom, 62 * zoom);
+            Text(MachineCanvas, lane, map.X(position) - 24 * zoom, map.Y(stage.YEnd) - 13 * zoom,
+                "#0F172A", 10 * zoom, 90 * zoom);
         }
         // All four gantry edges are configured in world mm; none depends on playback.
         Box(settings.GantryXStart, settings.GantryXEnd, settings.GantryYStart, settings.GantryYEnd, "#64748B", .4);
         var scanning = vm.ScheduledOperations.Any(o => o.RequiresScannerHead && vm.CurrentTime >= o.StartTime && vm.CurrentTime < o.EndTime);
         Box(settings.HeadX - settings.HeadWidth / 2, settings.HeadX + settings.HeadWidth / 2,
             state.HeadY - settings.HeadHeight / 2, state.HeadY + settings.HeadHeight / 2, scanning ? "#DC2626" : "#2563EB", 1);
-        var axisY = map.Y(Math.Min(settings.GantryYStart, Math.Min(settings.Stage1Y, settings.Stage2Y) - map.LaneHalfHeight)) + 8 * zoom;
+        var axisY = map.Y(map.MinY) + 8 * zoom;
         for (var i = 0; i <= 4; i++)
         {
             var mm = settings.StageXMin + (settings.StageXMax - settings.StageXMin) * i / 4;
@@ -308,11 +312,11 @@ public partial class MainWindow : Window
         }
         Text(MachineCanvas, $"S1 X={state.Stage1X:0.###} · S2 X={state.Stage2X:0.###} · Head Y={state.HeadY:0.###} mm", 4 * zoom, Math.Max(20 * zoom, height - 16 * zoom), "#334155", 10 * zoom, Math.Max(1, width - 8 * zoom));
 
-        void Box(double x1, double x2, double y1, double y2, string color, double opacity)
+        void Box(double x1, double x2, double y1, double y2, string color, double opacity, string name = "")
         {
             var rectangle = new Rectangle { Width = (x2 - x1) * map.Scale, Height = (y2 - y1) * map.Scale,
                 Fill = Brush(color), Stroke = Brush("#64748B"), StrokeThickness = .5, Opacity = opacity,
-                ToolTip = $"X: {x1:0.###}–{x2:0.###} mm · Y: {y1:0.###}–{y2:0.###} mm" };
+                ToolTip = $"{name}\nX: {x1:0.###}–{x2:0.###} mm · Y: {y1:0.###}–{y2:0.###} mm" };
             Canvas.SetLeft(rectangle, map.X(x1)); Canvas.SetTop(rectangle, map.Y(y2)); MachineCanvas.Children.Add(rectangle);
         }
     }

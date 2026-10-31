@@ -5,6 +5,17 @@ public sealed class MachineSettings
 {
     public double StageXMin { get; set; } = 0;
     public double StageXMax { get; set; } = 100;
+    // Missing fields in older projects inherit the original travel interval.
+    private double? rail1XStart, rail1XEnd, rail2XStart, rail2XEnd;
+    public double Rail1XStart { get => rail1XStart ?? StageXMin; set => rail1XStart = value; }
+    public double Rail1XEnd { get => rail1XEnd ?? StageXMax; set => rail1XEnd = value; }
+    public double Rail2XStart { get => rail2XStart ?? StageXMin; set => rail2XStart = value; }
+    public double Rail2XEnd { get => rail2XEnd ?? StageXMax; set => rail2XEnd = value; }
+    public double RailWidthY { get; set; } = 4;
+    public double Stage1LengthX { get; set; } = 20;
+    public double Stage1WidthY { get; set; } = 20;
+    public double Stage2LengthX { get; set; } = 20;
+    public double Stage2WidthY { get; set; } = 20;
     public double Stage1InitialX { get; set; }
     public double Stage2InitialX { get; set; }
     public double HeadYMin { get; set; } = 0;
@@ -34,12 +45,18 @@ public sealed class MachineSettings
     public void Validate()
     {
         double[] numbers = [StageXMin, StageXMax, Stage1InitialX, Stage2InitialX, HeadYMin, HeadYMax,
+            Rail1XStart, Rail1XEnd, Rail2XStart, Rail2XEnd, RailWidthY, Stage1LengthX, Stage1WidthY, Stage2LengthX, Stage2WidthY,
             Stage1Y, Stage2Y, HeadInitialY, GantryXStart, GantryXEnd, GantryYStart, GantryYEnd, HeadX, HeadWidth, HeadHeight];
         if (numbers.Any(x => !double.IsFinite(x) || Math.Abs(x) > 1e9))
             throw new InvalidOperationException("설비 치수는 ±1,000,000,000 mm 범위의 유한한 수여야 합니다.");
         if (StageXMax - StageXMin < 0.001 || HeadYMax - HeadYMin < 0.001 ||
             GantryXEnd - GantryXStart < 0.001 || GantryYEnd - GantryYStart < 0.001)
             throw new InvalidOperationException("각 이동/갠트리 범위는 시작보다 끝이 최소 0.001 mm 커야 합니다.");
+        if (Rail1XEnd - Rail1XStart < .001 || Rail2XEnd - Rail2XStart < .001 ||
+            RailWidthY < .001 || Stage1LengthX < .001 || Stage1WidthY < .001 || Stage2LengthX < .001 || Stage2WidthY < .001)
+            throw new InvalidOperationException("레일 길이·폭과 스테이지 길이·폭은 최소 0.001 mm여야 합니다.");
+        if (StageXMin < Math.Max(Rail1XStart, Rail2XStart) || StageXMax > Math.Min(Rail1XEnd, Rail2XEnd))
+            throw new InvalidOperationException("스테이지 중심의 X 이동 범위가 Rail 1과 Rail 2의 X 범위 안에 있어야 합니다.");
         if (Stage1InitialX < StageXMin || Stage1InitialX > StageXMax || Stage2InitialX < StageXMin || Stage2InitialX > StageXMax)
             throw new InvalidOperationException("스테이지 초기 X 위치는 X 이동 범위 안이어야 합니다.");
         if (Stage1Y < HeadYMin || Stage1Y > HeadYMax || Stage2Y < HeadYMin || Stage2Y > HeadYMax ||

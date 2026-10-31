@@ -6,18 +6,23 @@ public sealed class MachineProjection
 {
     public double Scale { get; }
     private readonly double left, bottom, minX, minY;
-    public double LaneHalfHeight { get; }
-    public double MarkerWidth { get; }
+    public double MinY { get; }
     public MachineProjection(MachineSettings settings, double width, double height, double zoom = 1)
     {
         settings.Validate();
         if (!double.IsFinite(zoom) || zoom <= 0) throw new ArgumentOutOfRangeException(nameof(zoom));
-        LaneHalfHeight = Math.Min(10, Math.Abs(settings.Stage2Y - settings.Stage1Y) * .15);
-        MarkerWidth = (settings.StageXMax - settings.StageXMin) * .08;
-        minX = Math.Min(settings.StageXMin - MarkerWidth / 2, settings.GantryXStart);
-        var maxX = Math.Max(settings.StageXMax + MarkerWidth / 2, settings.GantryXEnd);
-        minY = Math.Min(settings.GantryYStart, Math.Min(settings.Stage1Y, settings.Stage2Y) - LaneHalfHeight);
-        var maxY = Math.Max(settings.GantryYEnd, Math.Max(settings.Stage1Y, settings.Stage2Y) + LaneHalfHeight);
+        var maxHalfLength = Math.Max(settings.Stage1LengthX, settings.Stage2LengthX) / 2;
+        minX = Math.Min(settings.StageXMin - maxHalfLength,
+            Math.Min(settings.GantryXStart, Math.Min(settings.Rail1XStart, settings.Rail2XStart)));
+        var maxX = Math.Max(settings.StageXMax + maxHalfLength,
+            Math.Max(settings.GantryXEnd, Math.Max(settings.Rail1XEnd, settings.Rail2XEnd)));
+        minY = Math.Min(settings.GantryYStart, Math.Min(
+            settings.Stage1Y - Math.Max(settings.Stage1WidthY, settings.RailWidthY) / 2,
+            settings.Stage2Y - Math.Max(settings.Stage2WidthY, settings.RailWidthY) / 2));
+        MinY = minY;
+        var maxY = Math.Max(settings.GantryYEnd, Math.Max(
+            settings.Stage1Y + Math.Max(settings.Stage1WidthY, settings.RailWidthY) / 2,
+            settings.Stage2Y + Math.Max(settings.Stage2WidthY, settings.RailWidthY) / 2));
         var plotWidth = Math.Max(1, width - 90);
         var plotHeight = Math.Max(1, height - 70);
         var baseScale = Math.Min(plotWidth / (maxX - minX), plotHeight / (maxY - minY));

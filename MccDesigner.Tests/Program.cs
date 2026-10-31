@@ -261,4 +261,37 @@ Check("simulator zoom enlarges actual mm geometry without changing aspect", () =
     Equal(2*(normal.Y(0)-normal.Y(100)),enlarged.Y(0)-enlarged.Y(100));
     Equal(enlarged.X(60)-enlarged.X(20),enlarged.Y(20)-enlarged.Y(60));
 });
+Check("rail stays fixed while stage body follows X position", () => {
+    var m=new MachineSettings(); var r=scheduler.Calculate([Move()]);
+    var rail=MachineGeometry.Rail(m,MachineAxes.Stage1);
+    Equal(0,rail.XStart); Equal(100,rail.XEnd); Equal(4,rail.Height);
+    var initial=MachineGeometry.Stage(m,MachineAxes.Stage1,MachineStateEvaluator.Evaluate(r,0,m).Stage1X);
+    var middle=MachineGeometry.Stage(m,MachineAxes.Stage1,MachineStateEvaluator.Evaluate(r,1,m).Stage1X);
+    Equal(0,initial.CenterX); Equal(50,middle.CenterX); Equal(20,middle.Width); Equal(20,middle.Height);
+    Assert(rail==MachineGeometry.Rail(m,MachineAxes.Stage1));
+});
+Check("individual stage dimensions and rail endpoints survive JSON", () => {
+    var m=new MachineSettings(){Rail1XStart=-50,Rail1XEnd=150,Rail2XStart=-100,Rail2XEnd=200,
+        RailWidthY=5,Stage1LengthX=30,Stage1WidthY=24,Stage2LengthX=40,Stage2WidthY=18};
+    var copy=ProjectSerializer.DeserializeProject(ProjectSerializer.Serialize([],m)).Machine;
+    Equal(-50,copy.Rail1XStart); Equal(200,copy.Rail2XEnd); Equal(5,copy.RailWidthY);
+    var body=MachineGeometry.Stage(copy,MachineAxes.Stage2,60); Equal(40,body.XStart); Equal(80,body.XEnd); Equal(18,body.Height);
+});
+Check("older mm projects inherit rail ranges without changing operation coordinates", () => {
+    var root=System.Text.Json.Nodes.JsonNode.Parse(ProjectSerializer.Serialize(LargeCycle(),LargeMachine()))!;
+    foreach(var name in new[]{"Rail1XStart","Rail1XEnd","Rail2XStart","Rail2XEnd","RailWidthY","Stage1LengthX","Stage1WidthY","Stage2LengthX","Stage2WidthY"})
+        root["Machine"]!.AsObject().Remove(name);
+    var copy=ProjectSerializer.DeserializeProject(root.ToJsonString());
+    Equal(-500,copy.Machine.Rail1XStart); Equal(2000,copy.Machine.Rail2XEnd); Equal(1250,copy.Operations[0].EndPosition);
+});
+Check("stage centre travel must remain supported by both rails", () => {
+    var m=new MachineSettings(){Rail2XEnd=90}; Reject(m.Validate);
+    m.Rail2XEnd=100; m.Stage1LengthX=0; Reject(m.Validate);
+});
+Check("projection includes full stage overhang and rail extents", () => {
+    var m=new MachineSettings(){Rail1XStart=-80,Rail1XEnd=180,Stage1LengthX=80,Stage2WidthY=60};
+    var map=new MachineProjection(m,600,300);
+    Assert(map.X(-80)>=0 && map.X(180)<=600); Assert(map.Y(130)>=0);
+    Assert(map.X(m.StageXMin-m.Stage1LengthX/2)>=0 && map.X(m.StageXMax+m.Stage1LengthX/2)<=600);
+});
 Console.WriteLine($"{passed} checks passed.");
