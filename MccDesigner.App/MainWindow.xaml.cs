@@ -96,21 +96,29 @@ public partial class MainWindow : Window
         for (int i=0;i<resources.Length;i++)
         {
             var y=top+i*rowH; Text(TimelineCanvas,resources[i],5,y+5,"#0F172A",11); Line(TimelineCanvas,left,y+rowH-2,TimelineCanvas.Width-8,y+rowH-2,"#CBD5E1",1);
-            foreach(var op in items.Where(o=>o.Resource==resources[i]))
+            foreach(var op in items.Where(o=>o.RequiredResources.Contains(resources[i])))
             {
                 var x=left+op.StartTime*scale; var w=Math.Max(2,op.Duration*scale);
-                var r=new Rectangle { Width=w, Height=22, RadiusX=4, RadiusY=4, Fill=Brush(op.Resource=="Gantry / Head"?"#2563EB":op.Resource=="Stage 1"?"#0D9488":"#D97706"), ToolTip=$"{op.Name}\n{op.StartTime:0.###}–{op.EndTime:0.###} s" };
+                var primary = op.Resource == resources[i];
+                var r=new Rectangle { Width=w, Height=22, RadiusX=4, RadiusY=4, Opacity=primary?1:0.45, Fill=Brush(op.Resource=="Gantry / Head"?"#2563EB":op.Resource=="Stage 1"?"#0D9488":"#D97706"), ToolTip=$"{op.Name}\n{op.StartTime:0.###}–{op.EndTime:0.###} s\n점유: {string.Join(", ", op.RequiredResources)}" };
                 Canvas.SetLeft(r,x); Canvas.SetTop(r,y+2); TimelineCanvas.Children.Add(r);
-                if(w>45) Text(TimelineCanvas,op.Name,x+4,y+5,"White",10,w-8);
+                if(w>45) Text(TimelineCanvas,primary?op.Name:$"{op.Name} (점유)",x+4,y+5,primary?"White":"#0F172A",10,w-8);
             }
         }
         var cx=left+vm.CurrentTime*scale; Line(TimelineCanvas,cx,12,cx,150,"#DC2626",2);
     }
     private void DrawMachine()
     {
-        MachineCanvas.Children.Clear(); var width=Math.Max(600,MachineCanvas.ActualWidth); double left=85,right=width-35;
+        MachineCanvas.Children.Clear(); var width=Math.Max(300,MachineCanvas.ActualWidth); double left=85,right=width-35;
         Text(MachineCanvas,"X →",8,8,"#334155",12); Text(MachineCanvas,"STAGE 2",left,8,"#0F172A",12); Text(MachineCanvas,"STAGE 1",left,63,"#0F172A",12);
         Stage(MachineCanvas,left,right,43,"#FEF3C7"); Stage(MachineCanvas,left,right,98,"#CCFBF1");
+        foreach (var lane in new[] { "Stage 1", "Stage 2" })
+        {
+            var active = vm.ScheduledOperations.FirstOrDefault(o => o.RequiredResources.Contains(lane) &&
+                vm.CurrentTime >= o.StartTime && vm.CurrentTime < o.EndTime);
+            Text(MachineCanvas, active?.Name ?? "대기", left + 4, lane == "Stage 2" ? 46 : 101,
+                "#334155", 10, Math.Max(20, right-left-8));
+        }
         Line(MachineCanvas,left,67,right,67,"#94A3B8",2); Line(MachineCanvas,left,122,right,122,"#94A3B8",2);
         var state = MachineStateEvaluator.Evaluate(vm.ScheduledOperations, vm.CurrentTime);
         var pos = state.Position;

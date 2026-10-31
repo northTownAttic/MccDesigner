@@ -9,19 +9,20 @@ public static class MachineStateEvaluator
     public static MachineState Evaluate(IReadOnlyList<ScheduledOperation> operations, double time)
     {
         if (!double.IsFinite(time)) throw new ArgumentOutOfRangeException(nameof(time));
-        var motions = operations.Where(o => o.IsMotion).OrderBy(o => o.StartTime).ToList();
-        var position = motions.Count == 0 ? 0 : motions[0].StartPosition;
-        var lane = motions.Count == 0 ? "Stage 1" : motions[0].TargetLane;
-        foreach (var op in motions)
+        var headOperations = operations.Where(o => o.Resource == "Gantry / Head").OrderBy(o => o.StartTime).ToList();
+        var position = headOperations.Count == 0 ? 0 : headOperations[0].StartPosition;
+        var lane = headOperations.Count == 0 ? "Stage 1" : headOperations[0].TargetLane;
+        foreach (var op in headOperations)
         {
             if (time < op.StartTime) break;
             lane = op.TargetLane;
             if (time < op.EndTime)
             {
+                if (!op.IsMotion) return new(position, lane, op.Name);
                 var fraction = op.Duration <= 0 ? 1 : Math.Clamp((time - op.StartTime) / op.Duration, 0, 1);
                 return new(op.StartPosition + (op.EndPosition - op.StartPosition) * fraction, lane, op.Name);
             }
-            position = op.EndPosition;
+            if (op.IsMotion) position = op.EndPosition;
         }
         return new(position, lane, null);
     }

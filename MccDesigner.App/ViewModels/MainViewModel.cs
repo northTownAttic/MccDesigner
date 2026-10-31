@@ -16,7 +16,7 @@ public sealed class MainViewModel : ObservableObject
     private double _currentTime;
     public ObservableCollection<OperationDefinition> Operations { get; } = new();
     public IReadOnlyList<ScheduledOperation> ScheduledOperations { get => _scheduled; private set { if (SetProperty(ref _scheduled, value)) { OnPropertyChanged(nameof(TotalDuration)); } } }
-    public OperationDefinition? SelectedOperation { get => _selectedOperation; set { SetProperty(ref _selectedOperation, value); RemoveCommand.RaiseCanExecuteChanged(); } }
+    public OperationDefinition? SelectedOperation { get => _selectedOperation; set { SetProperty(ref _selectedOperation, value); RefreshSelectionCommands(); } }
     public string Status { get => _status; set => SetProperty(ref _status, value); }
     public double CurrentTime { get => _currentTime; set { if (SetProperty(ref _currentTime, value)) OnPropertyChanged(nameof(CurrentTimeLabel)); } }
     public string CurrentTimeLabel => $"재생 시간: {CurrentTime:0.0} s";
@@ -24,6 +24,8 @@ public sealed class MainViewModel : ObservableObject
     public int OperationCount => Operations.Count;
     public RelayCommand AddCommand { get; }
     public RelayCommand RemoveCommand { get; }
+    public RelayCommand MoveUpCommand { get; }
+    public RelayCommand MoveDownCommand { get; }
     public RelayCommand CalculateCommand { get; }
     public RelayCommand SaveCommand { get; }
     public RelayCommand LoadCommand { get; }
@@ -32,16 +34,18 @@ public sealed class MainViewModel : ObservableObject
     {
         AddCommand = new(AddOperation);
         RemoveCommand = new(RemoveOperation, () => SelectedOperation != null);
+        MoveUpCommand = new(() => MoveSelected(-1), () => SelectedOperation != null && Operations.IndexOf(SelectedOperation) > 0);
+        MoveDownCommand = new(() => MoveSelected(1), () => SelectedOperation != null && Operations.IndexOf(SelectedOperation) < Operations.Count - 1);
         CalculateCommand = new(Calculate);
         SaveCommand = new(SaveProject);
         LoadCommand = new(LoadProject);
         ResetTimeCommand = new(() => CurrentTime = 0);
-        Operations.CollectionChanged += (_, _) => OnPropertyChanged(nameof(OperationCount));
+        Operations.CollectionChanged += (_, _) => { OnPropertyChanged(nameof(OperationCount)); RefreshSelectionCommands(); };
         Operations.Add(new() { Name = "Stage 1 Loading", Resource = "Stage 1", DurationSeconds = 5.0 });
         Operations.Add(new() { Name = "Stage 1 Vision", Resource = "Stage 1", DurationSeconds = 3.5 });
         Operations.Add(new() { Name = "Scan Stage 1", Resource = "Gantry / Head", DurationSeconds = 12.5, IsMotion = true, StartPosition = 0, EndPosition = 100, TargetLane = "Stage 1" });
-        Operations.Add(new() { Name = "Gantry Return", Resource = "Gantry / Head", DurationSeconds = 3.5, IsMotion = true, StartPosition = 100, EndPosition = 0, TargetLane = "Stage 1" });
-        Operations.Add(new() { Name = "Stage 2 Loading", Resource = "Stage 2", DurationSeconds = 6.25 });
+        Operations.Add(new() { Name = "Gantry Return", Resource = "Gantry / Head", DurationSeconds = 3.5, IsMotion = true, StartPosition = 100, EndPosition = 0, TargetLane = "Stage 1", OccupiesTargetLane = false });
+        Operations.Add(new() { Name = "Stage 2 Loading", Resource = "Stage 2", DurationSeconds = 6.25, WaitForPrevious = false });
         Operations.Add(new() { Name = "Scan Stage 2", Resource = "Gantry / Head", DurationSeconds = 12.5, IsMotion = true, StartPosition = 0, EndPosition = 100, TargetLane = "Stage 2" });
         Calculate();
     }
@@ -55,10 +59,27 @@ public sealed class MainViewModel : ObservableObject
         if (SelectedOperation is null) return;
         Operations.Remove(SelectedOperation); SelectedOperation = null; Calculate();
     }
+    private void RefreshSelectionCommands()
+    {
+        RemoveCommand.RaiseCanExecuteChanged();
+        MoveUpCommand.RaiseCanExecuteChanged();
+        MoveDownCommand.RaiseCanExecuteChanged();
+    }
+    private void MoveSelected(int offset)
+    {
+        if (SelectedOperation is null) return;
+        var selected = SelectedOperation;
+        var index = Operations.IndexOf(selected);
+        var destination = index + offset;
+        if (index < 0 || destination < 0 || destination >= Operations.Count) return;
+        Operations.Move(index, destination);
+        SelectedOperation = selected;
+        Calculate();
+    }
     public void RefreshCalculationAfterEdit() { OnPropertyChanged(nameof(OperationCount)); Calculate(); }
     private void Calculate()
     {
-        try { ScheduledOperations = _scheduler.Calculate(Operations.ToList()); CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 총 {TotalDuration:0.###}초"; }
+        try { ScheduledOperations = _scheduler.Calculate(Operations.ToList()); CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 총 {TotalDuration:0.###}초 (순차 합계 {Operations.Sum(x => x.DurationSeconds):0.###}초)"; }
         catch (Exception ex) { ScheduledOperations = Array.Empty<ScheduledOperation>(); CurrentTime = 0; Status = $"계산 오류: {ex.Message}"; }
     }
     private void SaveProject()
