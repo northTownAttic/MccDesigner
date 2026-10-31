@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("MccDesigner.App")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+0a4a2b754738d528fd6eb06fde7476987a3fd919")]
 [assembly: System.Reflection.AssemblyProductAttribute("MccDesigner.App")]
 [assembly: System.Reflection.AssemblyTitleAttribute("MccDesigner.App")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
