@@ -294,4 +294,38 @@ Check("projection includes full stage overhang and rail extents", () => {
     Assert(map.X(-80)>=0 && map.X(180)<=600); Assert(map.Y(130)>=0);
     Assert(map.X(m.StageXMin-m.Stage1LengthX/2)>=0 && map.X(m.StageXMax+m.Stage1LengthX/2)<=600);
 });
+Check("invalid machine draft remains drawable while strict validation rejects it", () => {
+    var m=new MachineSettings(){HeadX=180,HeadInitialY=220,Stage1InitialX=-150,Stage2Y=300};
+    var errors=m.GetValidationErrors(); Assert(errors.Count>=4); Reject(m.Validate);
+    var draft=MachinePreviewDraft.Create(m); var projection=MachineProjection.ForPreview(draft.Drawing,800,600);
+    Assert(projection.X(184)<800 && projection.X(-160)>=0 && projection.Y(310)>=0);
+    Equal(180,m.HeadX); Equal(220,m.HeadInitialY); Equal(-150,m.Stage1InitialX);
+    Reject(()=>new MachineProjection(m,800,600));
+});
+Check("all simultaneous constraint violations include names and current values", () => {
+    var m=new MachineSettings(){HeadX=180,Stage1InitialX=-150,Stage2Y=300};
+    var errors=m.GetValidationErrors();
+    Assert(errors.Any(x=>x.Contains("Head X") && x.Contains("176")));
+    Assert(errors.Any(x=>x.Contains("Stage 1 초기 X") && x.Contains("-150")));
+    Assert(errors.Any(x=>x.Contains("2열 Y") && x.Contains("300")));
+});
+Check("reversed ranges and negative dimensions have finite preview projection", () => {
+    var m=new MachineSettings(){GantryXStart=60,GantryXEnd=20,Rail1XStart=100,Rail1XEnd=0,Stage1LengthX=-20,HeadHeight=0};
+    Reject(m.Validate); var p=MachineProjection.ForPreview(m,800,600);
+    Assert(double.IsFinite(p.Scale) && p.Scale>0); Assert(double.IsFinite(p.X(60)) && double.IsFinite(p.Y(0)));
+    Equal(-20,m.Stage1LengthX); Equal(60,m.GantryXStart);
+});
+Check("preview numeric fallback never modifies original draft or previous image", () => {
+    var previous=new MachineSettings(){HeadX=45}; var m=new MachineSettings(){HeadX=double.NaN,Stage1LengthX=double.PositiveInfinity,GantryYEnd=1e12};
+    var draft=MachinePreviewDraft.Create(m,previous);
+    Equal(45,draft.Drawing.HeadX); Equal(20,draft.Drawing.Stage1LengthX); Equal(115,draft.Drawing.GantryYEnd);
+    Equal(3,draft.FallbackFields.Count); Assert(double.IsNaN(m.HeadX)); Equal(45,previous.HeadX);
+    Assert(double.IsFinite(MachineProjection.ForPreview(draft.Drawing,800,600).Scale));
+    Reject(()=>ProjectSerializer.Serialize([],m));
+});
+Check("correcting draft restores strict applicability", () => {
+    var m=new MachineSettings(){HeadX=180}; Assert(m.GetValidationErrors().Count>0);
+    m.HeadX=40; m.Validate(); Equal(0,m.GetValidationErrors().Count);
+    ProjectSerializer.DeserializeProject(ProjectSerializer.Serialize([],m));
+});
 Console.WriteLine($"{passed} checks passed.");

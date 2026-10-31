@@ -4,6 +4,7 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
 using MccDesigner.Models;
+using MccDesigner.Services;
 
 namespace MccDesigner.Views;
 
@@ -58,7 +59,8 @@ public sealed class MachineSettingsWindow : Window
         fit.Click += (_, _) => { zoom.Value = 100; previewScroll.ScrollToHorizontalOffset(0); previewScroll.ScrollToVerticalOffset(0); };
         zoomControls.Children.Add(zoom); header.Children.Add(zoomControls);
         DockPanel.SetDock(header, Dock.Top); visualPanel.Children.Add(header);
-        DockPanel.SetDock(validationMessage, Dock.Bottom); visualPanel.Children.Add(validationMessage);
+        var warnings = new ScrollViewer { Content = validationMessage, MaxHeight = 180, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        DockPanel.SetDock(warnings, Dock.Bottom); visualPanel.Children.Add(warnings);
         preview.HorizontalAlignment = HorizontalAlignment.Left; preview.VerticalAlignment = VerticalAlignment.Top;
         previewScroll.Content = preview;
         previewScroll.ScrollChanged += (_, e) => { if (e.ViewportWidthChange != 0 || e.ViewportHeightChange != 0) ResizePreview(); };
@@ -84,7 +86,7 @@ public sealed class MachineSettingsWindow : Window
         {
             var row = new DockPanel { Margin = new Thickness(0, 2, 8, 2) };
             row.Children.Add(new TextBlock { Text = field.Label + " (mm)", Width = 240, VerticalAlignment = VerticalAlignment.Center });
-            var box = new TextBox { MinWidth = 100 };
+            var box = new TextBox { MinWidth = 100, Tag = field.Label };
             box.SetBinding(TextBox.TextProperty, new Binding(field.Property) { Source = Settings,
                 UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged, ValidatesOnExceptions = true, StringFormat = "0.###" });
             box.TextChanged += (_, _) => { refresh.Stop(); refresh.Start(); };
@@ -107,22 +109,31 @@ public sealed class MachineSettingsWindow : Window
     private bool UpdatePreview()
     {
         foreach (var box in inputs) box.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-        var error = inputs.Any(Validation.GetHasError) ? "숫자 입력 오류를 수정하세요." : null;
-        if (error is null)
-            try { Settings.Validate(); }
-            catch (InvalidOperationException validation) { error = validation.Message; }
-        apply.IsEnabled = error is null;
-        preview.Settings = error is null ? Settings.Copy() : null;
+        var errors = inputs.Where(Validation.GetHasError).Select(box => $"{box.Tag}: 숫자를 입력하세요.").ToList();
+        errors.AddRange(Settings.GetValidationErrors());
+        var draft = MachinePreviewDraft.Create(Settings, preview.Settings);
+        preview.Settings = draft.Drawing;
         preview.Render();
-        validationMessage.Foreground = error is null ? Brushes.DarkGreen : Brushes.Firebrick;
-        validationMessage.Text = error is null
+        validationMessage.Foreground = errors.Count == 0 ? Brushes.DarkGreen : Brushes.Firebrick;
+        validationMessage.Text = errors.Count == 0
             ? "입력값이 미리보기에 반영되었습니다. 적용하면 본 시뮬레이터에도 반영됩니다. 취소하면 기존 설정을 유지합니다."
-            : "미리보기 대기: " + error;
-        return error is null;
+            : $"제약 위반 {errors.Count}개 — 미리보기는 계속 표시하며 적용은 차단합니다.\n• " + string.Join("\n• ", errors);
+        if (draft.FallbackFields.Count > 0 || inputs.Any(Validation.GetHasError))
+            validationMessage.Text += "\n숫자가 아니거나 표시 한계를 넘은 항목은 마지막으로 표시 가능한 값을 사용합니다. 입력값은 변경하지 않습니다.";
+        if (errors.Count > 0)
+            validationMessage.Text += "\n미리보기에서는 역전된 범위와 음수 크기를 외곽의 절댓값으로, 0 크기를 작은 표시로 그립니다. 실제 입력값은 그대로이며 적용할 수 없습니다.";
+        return errors.Count == 0;
     }
     private void Apply()
     {
         refresh.Stop();
-        if (UpdatePreview()) DialogResult = true;
+        if (!UpdatePreview())
+        {
+            MessageBox.Show(this, "제약 위반 또는 숫자 입력 오류가 있어 적용할 수 없습니다. 미리보기 아래의 위반 내용을 수정하세요.", "설비 설정 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        // The simulator and saved project remain strict even though drawing tolerates invalid drafts.
+        Settings.Validate();
+        DialogResult = true;
     }
 }

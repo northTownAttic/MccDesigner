@@ -42,28 +42,53 @@ public sealed class MachineSettings
         MachineAxes.Stage1 => Stage1Y, MachineAxes.Stage2 => Stage2Y,
         _ => throw new InvalidOperationException("스캔 장비는 Stage 1 또는 Stage 2여야 합니다.")
     };
+    public IReadOnlyList<string> GetValidationErrors()
+    {
+        var errors = new List<string>();
+        foreach (var property in NumericProperties)
+        {
+            var value = (double)property.GetValue(this)!;
+            if (!double.IsFinite(value) || Math.Abs(value) > 1e9)
+                errors.Add($"{property.Name}: ±1,000,000,000 mm 범위의 유한한 수여야 합니다.");
+        }
+        if (errors.Count > 0) return errors;
+        Range("Stage X 이동", StageXMin, StageXMax); Range("Head Y 이동", HeadYMin, HeadYMax);
+        Range("갠트리 X", GantryXStart, GantryXEnd); Range("갠트리 Y", GantryYStart, GantryYEnd);
+        Range("Rail 1 X", Rail1XStart, Rail1XEnd); Range("Rail 2 X", Rail2XStart, Rail2XEnd);
+        Positive("Rail 폭 Y", RailWidthY); Positive("Stage 1 길이 X", Stage1LengthX); Positive("Stage 1 폭 Y", Stage1WidthY);
+        Positive("Stage 2 길이 X", Stage2LengthX); Positive("Stage 2 폭 Y", Stage2WidthY);
+        Positive("Head 폭 X", HeadWidth); Positive("Head 높이 Y", HeadHeight);
+        Inside("Stage X 이동 범위 / Rail 1", StageXMin, StageXMax, Rail1XStart, Rail1XEnd);
+        Inside("Stage X 이동 범위 / Rail 2", StageXMin, StageXMax, Rail2XStart, Rail2XEnd);
+        Inside("Stage 1 초기 X", Stage1InitialX, Stage1InitialX, StageXMin, StageXMax);
+        Inside("Stage 2 초기 X", Stage2InitialX, Stage2InitialX, StageXMin, StageXMax);
+        Inside("1열 Y", Stage1Y, Stage1Y, HeadYMin, HeadYMax);
+        Inside("2열 Y", Stage2Y, Stage2Y, HeadYMin, HeadYMax);
+        Inside("Head 초기 Y", HeadInitialY, HeadInitialY, HeadYMin, HeadYMax);
+        if (Math.Abs(Stage1Y - Stage2Y) < .001) errors.Add("1열과 2열의 Y 위치는 최소 0.001 mm 떨어져 있어야 합니다.");
+        if (HeadWidth > 0) Inside("Head X 외곽 / 갠트리", HeadX - HeadWidth / 2, HeadX + HeadWidth / 2, GantryXStart, GantryXEnd);
+        if (HeadHeight > 0) Inside("Head Y 이동 외곽 / 갠트리", HeadYMin - HeadHeight / 2, HeadYMax + HeadHeight / 2, GantryYStart, GantryYEnd);
+        return errors;
+
+        void Range(string label, double start, double end)
+        {
+            if (end - start < .001) errors.Add($"{label}: 시작 {start:0.###}, 끝 {end:0.###} mm — 끝은 시작보다 최소 0.001 mm 커야 합니다.");
+        }
+        void Positive(string label, double value)
+        {
+            if (value < .001) errors.Add($"{label}: {value:0.###} mm — 최소 0.001 mm여야 합니다.");
+        }
+        void Inside(string label, double from, double to, double min, double max)
+        {
+            if (from < min || to > max)
+                errors.Add($"{label}: {from:0.###}~{to:0.###} mm가 허용 범위 {min:0.###}~{max:0.###} mm를 벗어났습니다.");
+        }
+    }
+    internal static readonly System.Reflection.PropertyInfo[] NumericProperties = typeof(MachineSettings)
+        .GetProperties().Where(p => p.PropertyType == typeof(double)).ToArray();
     public void Validate()
     {
-        double[] numbers = [StageXMin, StageXMax, Stage1InitialX, Stage2InitialX, HeadYMin, HeadYMax,
-            Rail1XStart, Rail1XEnd, Rail2XStart, Rail2XEnd, RailWidthY, Stage1LengthX, Stage1WidthY, Stage2LengthX, Stage2WidthY,
-            Stage1Y, Stage2Y, HeadInitialY, GantryXStart, GantryXEnd, GantryYStart, GantryYEnd, HeadX, HeadWidth, HeadHeight];
-        if (numbers.Any(x => !double.IsFinite(x) || Math.Abs(x) > 1e9))
-            throw new InvalidOperationException("설비 치수는 ±1,000,000,000 mm 범위의 유한한 수여야 합니다.");
-        if (StageXMax - StageXMin < 0.001 || HeadYMax - HeadYMin < 0.001 ||
-            GantryXEnd - GantryXStart < 0.001 || GantryYEnd - GantryYStart < 0.001)
-            throw new InvalidOperationException("각 이동/갠트리 범위는 시작보다 끝이 최소 0.001 mm 커야 합니다.");
-        if (Rail1XEnd - Rail1XStart < .001 || Rail2XEnd - Rail2XStart < .001 ||
-            RailWidthY < .001 || Stage1LengthX < .001 || Stage1WidthY < .001 || Stage2LengthX < .001 || Stage2WidthY < .001)
-            throw new InvalidOperationException("레일 길이·폭과 스테이지 길이·폭은 최소 0.001 mm여야 합니다.");
-        if (StageXMin < Math.Max(Rail1XStart, Rail2XStart) || StageXMax > Math.Min(Rail1XEnd, Rail2XEnd))
-            throw new InvalidOperationException("스테이지 중심의 X 이동 범위가 Rail 1과 Rail 2의 X 범위 안에 있어야 합니다.");
-        if (Stage1InitialX < StageXMin || Stage1InitialX > StageXMax || Stage2InitialX < StageXMin || Stage2InitialX > StageXMax)
-            throw new InvalidOperationException("스테이지 초기 X 위치는 X 이동 범위 안이어야 합니다.");
-        if (Stage1Y < HeadYMin || Stage1Y > HeadYMax || Stage2Y < HeadYMin || Stage2Y > HeadYMax ||
-            HeadInitialY < HeadYMin || HeadInitialY > HeadYMax || Math.Abs(Stage1Y - Stage2Y) < 0.001)
-            throw new InvalidOperationException("열 Y 위치는 서로 달라야 하며 열/헤드 초기 위치는 Y 이동 범위 안이어야 합니다.");
-        if (HeadWidth < 0.001 || HeadHeight < 0.001 || HeadX - HeadWidth / 2 < GantryXStart || HeadX + HeadWidth / 2 > GantryXEnd ||
-            HeadYMin - HeadHeight / 2 < GantryYStart || HeadYMax + HeadHeight / 2 > GantryYEnd)
-            throw new InvalidOperationException("헤드 크기는 양수여야 하며 헤드의 X 위치와 Y 이동 범위 전체가 갠트리 외곽 안이어야 합니다.");
+        var errors = GetValidationErrors();
+        if (errors.Count > 0) throw new InvalidOperationException(string.Join("\n", errors));
     }
 }

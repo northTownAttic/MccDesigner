@@ -22,7 +22,7 @@ public sealed class MachineSettingsPreview : Canvas
     {
         Children.Clear();
         if (Settings is not { } m || ActualWidth < 10 || ActualHeight < 10) return;
-        var map = new MachineProjection(m, ActualWidth / Zoom, ActualHeight / Zoom, Zoom);
+        var map = MachineProjection.ForPreview(m, ActualWidth / Zoom, ActualHeight / Zoom, Zoom);
         var selected = SelectedProperty ?? "";
         foreach (var stage in MachineAxes.Resources.Take(2))
         {
@@ -72,11 +72,11 @@ public sealed class MachineSettingsPreview : Canvas
         }
         void Box(MachineRectangle geometry, string color, double opacity, string name, bool highlight)
         {
-            var shape = new Rectangle { Width = geometry.Width * map.Scale, Height = geometry.Height * map.Scale,
+            var shape = new Rectangle { Width = Math.Max(2, Math.Abs(geometry.Width) * map.Scale), Height = Math.Max(2, Math.Abs(geometry.Height) * map.Scale),
                 Fill = Brush(color), Opacity = opacity, Stroke = highlight ? Brushes.Magenta : Brush("#64748B"),
                 StrokeThickness = highlight ? 3 : 1,
                 ToolTip = $"{name}\nX {geometry.XStart:0.###}–{geometry.XEnd:0.###} mm\nY {geometry.YStart:0.###}–{geometry.YEnd:0.###} mm\n{geometry.Width:0.###} × {geometry.Height:0.###} mm" };
-            SetLeft(shape, map.X(geometry.XStart)); SetTop(shape, map.Y(geometry.YEnd)); Children.Add(shape);
+            SetLeft(shape, map.X(Math.Min(geometry.XStart, geometry.XEnd))); SetTop(shape, map.Y(Math.Max(geometry.YStart, geometry.YEnd))); Children.Add(shape);
         }
     }
     private static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));
