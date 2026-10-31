@@ -9,15 +9,18 @@ public static class ProjectSerializer
         public int FormatVersion { get; set; }
         public string? AxisModel { get; set; }
         public string? Units { get; set; }
+        public PlaybackOptions? Playback { get; set; }
         public MachineSettings? Machine { get; set; }
         public List<OperationDefinition>? Operations { get; set; }
     }
     private const string AxisModel = "FixedGantry_StageX_HeadY";
-    public static string Serialize(IReadOnlyList<OperationDefinition> operations, MachineSettings? settings = null)
+    public static string Serialize(IReadOnlyList<OperationDefinition> operations, MachineSettings? settings = null, PlaybackOptions? playback = null)
     {
         settings ??= new MachineSettings();
+        playback ??= new PlaybackOptions();
+        playback.Validate();
         new Scheduler().Calculate(operations, settings);
-        return JsonSerializer.Serialize(new ProjectDocument { FormatVersion = 3, AxisModel = AxisModel, Units = "mm", Machine = settings,
+        return JsonSerializer.Serialize(new ProjectDocument { FormatVersion = 3, AxisModel = AxisModel, Units = "mm", Machine = settings, Playback = playback,
             Operations = operations.ToList() }, new JsonSerializerOptions { WriteIndented = true });
     }
     public static List<OperationDefinition> Deserialize(string json) => DeserializeProject(json).Operations;
@@ -28,6 +31,7 @@ public static class ProjectSerializer
         List<OperationDefinition> operations;
         var settings = new MachineSettings();
         var legacyUnits = true;
+        var playback = new PlaybackOptions();
         if (document.RootElement.ValueKind == JsonValueKind.Array)
         {
             // Old head-X data has a different physical meaning; never reinterpret it as head-Y.
@@ -50,11 +54,13 @@ public static class ProjectSerializer
                 settings = project.Machine;
                 legacyUnits = false;
             }
+            playback = project.Playback ?? new PlaybackOptions();
+            playback.Validate();
             operations = project.Operations ?? throw new InvalidOperationException("작업 데이터가 없습니다.");
         }
         new Scheduler().Calculate(operations, settings);
-        return new LoadedProject(operations, settings, legacyUnits);
+        return new LoadedProject(operations, settings, legacyUnits, playback);
     }
 }
 
-public sealed record LoadedProject(List<OperationDefinition> Operations, MachineSettings Machine, bool ImportedLegacyUnits);
+public sealed record LoadedProject(List<OperationDefinition> Operations, MachineSettings Machine, bool ImportedLegacyUnits, PlaybackOptions Playback);

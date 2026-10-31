@@ -13,6 +13,16 @@ public sealed class MainViewModel : ObservableObject
     private IReadOnlyList<ScheduledOperation> _scheduled = Array.Empty<ScheduledOperation>();
     private string _status = "작업을 편집한 뒤 MCC 계산을 누르세요.";
     private double _currentTime;
+    private int _repeatCount = 1;
+    private bool _infiniteRepeat;
+    private bool _playbackActive;
+    private string _playbackProgress = "대기 · 완료 0회 · 누적 0.0 s";
+    public int RepeatCount { get => _repeatCount; set => SetProperty(ref _repeatCount, value); }
+    public bool InfiniteRepeat { get => _infiniteRepeat; set => SetProperty(ref _infiniteRepeat, value); }
+    public bool PlaybackActive { get => _playbackActive; set { if (SetProperty(ref _playbackActive, value)) OnPropertyChanged(nameof(CanEditPlayback)); } }
+    public bool CanEditPlayback => !PlaybackActive;
+    public string PlaybackProgress { get => _playbackProgress; set => SetProperty(ref _playbackProgress, value); }
+    public PlaybackOptions PlaybackOptions => new() { RepeatCount = RepeatCount, Infinite = InfiniteRepeat };
     public MachineSettings Machine { get; private set; } = new();
     public string AxisHint => $"위치 단위: mm · Stage=X / Head=Y · 1열 Y={Machine.Stage1Y:0.###} / 2열 Y={Machine.Stage2Y:0.###}";
     public RelayCommand EditMachineCommand { get; }
@@ -92,7 +102,7 @@ public sealed class MainViewModel : ObservableObject
     {
         var dlg = new SaveFileDialog { Filter = "MCC 프로젝트 (*.json)|*.json", FileName = "MccProject.json" };
         if (dlg.ShowDialog() != true) return;
-        try { File.WriteAllText(dlg.FileName, ProjectSerializer.Serialize(Operations.ToList(), Machine)); Status = $"저장 완료: {dlg.FileName}"; }
+        try { File.WriteAllText(dlg.FileName, ProjectSerializer.Serialize(Operations.ToList(), Machine, PlaybackOptions)); Status = $"저장 완료: {dlg.FileName}"; }
         catch (Exception ex) { Status = $"저장 실패: {ex.Message}"; MessageBox.Show(Status); }
     }
     private void LoadProject()
@@ -102,6 +112,7 @@ public sealed class MainViewModel : ObservableObject
         try {
             var loaded = ProjectSerializer.DeserializeProject(File.ReadAllText(dlg.FileName));
             var calculated = _scheduler.Calculate(loaded.Operations, loaded.Machine);
+            RepeatCount = loaded.Playback.RepeatCount; InfiniteRepeat = loaded.Playback.Infinite;
             Machine = loaded.Machine; OnPropertyChanged(nameof(Machine)); OnPropertyChanged(nameof(AxisHint));
             Operations.Clear(); foreach (var op in loaded.Operations) Operations.Add(op);
             SelectedOperation = null; ScheduledOperations = calculated; CurrentTime = 0; Status = $"불러오기 완료: {dlg.FileName}" + (loaded.ImportedLegacyUnits ? " · 이전 좌표값을 변경 없이 1단위=1 mm로 읽었습니다. 설비 설정을 확인하세요." : "");

@@ -47,14 +47,14 @@ Check("reject stage2 scan without Y transfer", () => Reject(() => scheduler.Calc
 Check("reject stage1 scan after moving head to stage2", () => Reject(() => scheduler.Calculate([Move(MachineAxes.Head),Scan()])));
 Check("scan stage2 after Y transfer", () => { var r=scheduler.Calculate([Move(MachineAxes.Head),Scan(MachineAxes.Stage2)]); Equal(2,r[1].StartTime); Equal(100,MachineStateEvaluator.Evaluate(r,3).HeadY); });
 Check("head between lanes cannot scan", () => Reject(() => scheduler.Calculate([Move(MachineAxes.Head,to:50),Scan(MachineAxes.Stage2)])));
-Check("versioned JSON preserves axis model and flags", () => { var copy=ProjectSerializer.Deserialize(ProjectSerializer.Serialize(DemoProject.Create())); Assert(copy[3].RequiresScannerHead); Assert(copy[4].Resource==MachineAxes.Head); Assert(!copy[6].WaitForPrevious); Equal(35.5,scheduler.Calculate(copy).Max(x=>x.EndTime)); });
+Check("versioned JSON preserves axis model and flags", () => { var copy=ProjectSerializer.Deserialize(ProjectSerializer.Serialize(DemoProject.Create())); Assert(copy[3].RequiresScannerHead); Assert(copy[4].Resource==MachineAxes.Head); Assert(!copy[7].WaitForPrevious); Equal(39,scheduler.Calculate(copy).Max(x=>x.EndTime)); });
 Check("legacy stationary stage JSON stays sequential", () => { var copy=ProjectSerializer.Deserialize("""[{"Name":"A","DurationSeconds":8},{"Name":"B","Resource":"Stage 2","DurationSeconds":4}]"""); Equal(8,scheduler.Calculate(copy)[1].StartTime); });
 Check("legacy head-X JSON never reinterpreted as Y", () => Reject(() => ProjectSerializer.Deserialize("""[{"Resource":"Gantry / Head","IsMotion":true}]""")));
 Check("reject unsupported project version", () => Reject(() => ProjectSerializer.Deserialize("""{"FormatVersion":99,"AxisModel":"FixedGantry_StageX_HeadY","Operations":[]}""")));
 Check("reject missing versioned operations", () => Reject(() => ProjectSerializer.Deserialize("""{"FormatVersion":2,"AxisModel":"FixedGantry_StageX_HeadY"}""")));
 Check("demo reservations, cycle and head fixed during both scans", () => {
-    var r=scheduler.Calculate(DemoProject.Create()); Equal(35.5,r.Max(x=>x.EndTime));
-    Equal(0,r[0].StartTime); Equal(0,r[1].StartTime); Equal(21,r[4].StartTime); Equal(23,r[5].StartTime); Equal(21,r[6].StartTime);
+    var r=scheduler.Calculate(DemoProject.Create()); Equal(39,r.Max(x=>x.EndTime));
+    Equal(0,r[0].StartTime); Equal(0,r[1].StartTime); Equal(21,r[4].StartTime); Equal(23,r[5].StartTime); Equal(35.5,r[6].StartTime); Equal(21,r[7].StartTime); Equal(35.5,r[8].StartTime);
     var s1=MachineStateEvaluator.Evaluate(r,14.75); Equal(50,s1.Stage1X); Equal(0,s1.HeadY);
     var transfer=MachineStateEvaluator.Evaluate(r,22); Equal(50,transfer.HeadY);
     var s2=MachineStateEvaluator.Evaluate(r,29.25); Equal(50,s2.Stage2X); Equal(100,s2.HeadY);
@@ -127,5 +127,85 @@ Check("large machine projection contains configured geometry", () => {
     var p=new MachineProjection(LargeMachine(),600,300);
     Assert(p.X(-500)>=0 && p.X(2000)<=600 && p.Y(620)>=0 && p.Y(-120)<=300);
     Equal((p.X(600)-p.X(200))/400,(p.Y(-50)-p.Y(450))/500);
+});
+var closedCycle = scheduler.Calculate(DemoProject.Create());
+Check("single pass permits non-home ending", () => {
+    var session=new PlaybackSession(); session.Start(scheduler.Calculate([Move()]),new(),new());
+    session.Advance(2); Assert(session.State==PlaybackState.Completed); Equal(2,session.CycleTime); Equal(1,session.CompletedCycles);
+});
+Check("finite repeating cycle reports progress and final end", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){RepeatCount=3});
+    session.Advance(39); Equal(1,session.CompletedCycles); Equal(2,session.CurrentCycle); Equal(0,session.CycleTime);
+    session.Advance(83); Equal(2,session.CompletedCycles); Equal(3,session.CurrentCycle); Equal(5,session.CycleTime);
+    session.Advance(200); Assert(session.State==PlaybackState.Completed); Equal(117,session.ElapsedSeconds); Equal(39,session.CycleTime); Equal(3,session.CompletedCycles); Equal(3,session.CurrentCycle);
+});
+Check("infinite playback survives multiple skipped ticks", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){Infinite=true});
+    session.Advance(39*1234+5.5); Assert(session.State==PlaybackState.Running); Equal(1234,session.CompletedCycles); Equal(1235,session.CurrentCycle); Equal(5.5,session.CycleTime);
+});
+Check("pause freezes time and resume continues", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){RepeatCount=2});
+    session.Advance(10); session.Pause(); session.Advance(30); Equal(10,session.ElapsedSeconds);
+    session.Resume(); session.Advance(11); Equal(11,session.ElapsedSeconds); Equal(11,session.CycleTime);
+});
+Check("stop freezes pose and next start resets counters", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){Infinite=true});
+    session.Advance(45); session.Stop(); session.Advance(100); session.Resume();
+    Assert(session.State==PlaybackState.Stopped); Equal(6,session.CycleTime); Equal(1,session.CompletedCycles);
+    session.Start(closedCycle,new(),new()); Equal(0,session.CycleTime); Equal(0,session.CompletedCycles);
+});
+Check("reset clears all playback progress", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){Infinite=true}); session.Advance(100); session.Reset();
+    Assert(session.State==PlaybackState.Ready); Equal(0,session.ElapsedSeconds); Equal(0,session.CycleTime); Equal(0,session.CompletedCycles); Equal(1,session.CurrentCycle);
+});
+Check("repeat rejects missing stage return", () => {
+    var session=new PlaybackSession(); Reject(()=>session.Start(scheduler.Calculate([Move()]),new(),new(){RepeatCount=2}));
+});
+Check("repeat rejects missing head return", () => {
+    var session=new PlaybackSession(); Reject(()=>session.Start(scheduler.Calculate([Move(MachineAxes.Head)]),new(),new(){Infinite=true}));
+});
+Check("repeat error identifies all non-returned axes", () => {
+    var schedule=scheduler.Calculate([Move(),Move(MachineAxes.Stage2),Move(MachineAxes.Head)]);
+    try { PlaybackSession.ValidateCycleClosure(schedule,new()); } catch(InvalidOperationException e) {
+        Assert(MachineAxes.Resources.All(e.Message.Contains)); return;
+    }
+    throw new Exception("Expected closure rejection");
+});
+Check("repeat validates custom mm initial positions", () => {
+    var m=LargeMachine(); var work=LargeCycle();
+    work.Add(Move(MachineAxes.Stage1,from:1250,to:50));
+    work.Add(Move(MachineAxes.Stage2,from:1500,to:-100));
+    work.Add(Move(MachineAxes.Head,from:450,to:-50));
+    var r=scheduler.Calculate(work,m); var session=new PlaybackSession(); session.Start(r,m,new(){RepeatCount=2});
+    var duration=r.Max(x=>x.EndTime); session.Advance(duration);
+    var pose=MachineStateEvaluator.Evaluate(r,session.CycleTime,m); Equal(50,pose.Stage1X); Equal(-100,pose.Stage2X); Equal(-50,pose.HeadY);
+});
+Check("repeat seam does not teleport any axis", () => {
+    var before=MachineStateEvaluator.Evaluate(closedCycle,39,new()); var after=MachineStateEvaluator.Evaluate(closedCycle,0,new());
+    Equal(before.Stage1X,after.Stage1X); Equal(before.Stage2X,after.Stage2X); Equal(before.HeadY,after.HeadY);
+});
+Check("reject invalid repetition count and empty cycle", () => {
+    var session=new PlaybackSession(); Reject(()=>session.Start(closedCycle,new(),new(){RepeatCount=0}));
+    Reject(()=>session.Start(closedCycle,new(),new(){RepeatCount=1_000_001})); Reject(()=>session.Start([],new(),new()));
+});
+Check("session snapshots playback options", () => {
+    var options=new PlaybackOptions(){RepeatCount=2}; var session=new PlaybackSession(); session.Start(closedCycle,new(),options);
+    options.RepeatCount=1; session.Advance(39); Assert(session.State==PlaybackState.Running);
+});
+Check("completed session ignores later ticks", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new()); session.Advance(40); session.Advance(100);
+    Equal(39,session.ElapsedSeconds); Equal(1,session.CompletedCycles);
+});
+Check("playback settings survive project roundtrip", () => {
+    var loaded=ProjectSerializer.DeserializeProject(ProjectSerializer.Serialize(DemoProject.Create(),new(),new(){RepeatCount=5,Infinite=true}));
+    Equal(5,loaded.Playback.RepeatCount); Assert(loaded.Playback.Infinite);
+});
+Check("existing project without playback settings defaults to one pass", () => {
+    var root=System.Text.Json.Nodes.JsonNode.Parse(ProjectSerializer.Serialize(DemoProject.Create()))!; root.AsObject().Remove("Playback");
+    var loaded=ProjectSerializer.DeserializeProject(root.ToJsonString()); Equal(1,loaded.Playback.RepeatCount); Assert(!loaded.Playback.Infinite);
+});
+Check("invalid saved repetition count rejected", () => {
+    var root=System.Text.Json.Nodes.JsonNode.Parse(ProjectSerializer.Serialize(DemoProject.Create()))!; root["Playback"]!["RepeatCount"]=0;
+    Reject(()=>ProjectSerializer.DeserializeProject(root.ToJsonString()));
 });
 Console.WriteLine($"{passed} checks passed.");

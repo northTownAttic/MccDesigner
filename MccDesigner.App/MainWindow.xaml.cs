@@ -15,7 +15,9 @@ public partial class MainWindow : Window
     private readonly MainViewModel vm;
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(30) };
     private readonly Stopwatch playbackClock = new();
-    private double playbackStart;
+    private readonly PlaybackSession playback = new();
+    private int editGeneration;
+    private bool operationEditPending;
     private bool committingEdit;
     public MainWindow()
     {
@@ -26,9 +28,11 @@ public partial class MainWindow : Window
             if (e.ViewportWidthChange != 0) DrawTimeline();
         };
         MachineCanvas.SizeChanged += (_, _) => DrawMachine();
+        OperationsGrid.BeginningEdit += (_, _) => operationEditPending = true;
         timer.Tick += Timer_Tick;
         vm.PropertyChanged += (_, e) => {
-            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine)) timer.Stop();
+            if (e.PropertyName == nameof(MainViewModel.ScheduledOperations)) operationEditPending = false;
+            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine) or nameof(MainViewModel.RepeatCount) or nameof(MainViewModel.InfiniteRepeat)) ResetPlayback();
             if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.CurrentTime) or nameof(MainViewModel.Machine)) DrawAll();
         };
         Closed += (_, _) => { timer.Stop(); playbackClock.Stop(); };
@@ -38,8 +42,10 @@ public partial class MainWindow : Window
     private void OperationsGrid_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
     {
         if (committingEdit || e.EditAction != DataGridEditAction.Commit) return;
-        timer.Stop();
+        PausePlayback();
+        var generation = ++editGeneration;
         Dispatcher.BeginInvoke(new Action(() => {
+            if (generation != editGeneration) return;
             committingEdit = true;
             try { if (OperationsGrid.CommitEdit(DataGridEditingUnit.Row, true)) vm.RefreshCalculationAfterEdit(); }
             finally { committingEdit = false; }
@@ -50,7 +56,8 @@ public partial class MainWindow : Window
         DependencyObject? source = e.OriginalSource as DependencyObject;
         while (source != null && source is not Button) source = VisualTreeHelper.GetParent(source);
         if (source is not Button { Command: not null }) return;
-        timer.Stop();
+        PausePlayback();
+        editGeneration++;
         committingEdit = true;
         try
         {
@@ -68,19 +75,76 @@ public partial class MainWindow : Window
     {
         if (e.Command == DataGrid.DeleteCommand) e.Handled = true;
     }
-    private void Reset_Click(object sender, RoutedEventArgs e) { timer.Stop(); playbackClock.Reset(); vm.CurrentTime = 0; }
+    private void Reset_Click(object sender, RoutedEventArgs e) => ResetPlayback();
+    private void Stop_Click(object sender, RoutedEventArgs e)
+    {
+        if (playback.State == PlaybackState.Running) SamplePlayback();
+        timer.Stop(); playbackClock.Stop(); playback.Stop(); SyncPlayback();
+    }
+    private void ResetPlayback()
+    {
+        timer.Stop(); playbackClock.Reset(); playback.Reset(); SyncPlayback();
+    }
     private void Play_Click(object sender, RoutedEventArgs e)
     {
-        if (!OperationsGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
-            !OperationsGrid.CommitEdit(DataGridEditingUnit.Row, true) || vm.TotalDuration <= 0) return;
-        if (vm.CurrentTime >= vm.TotalDuration) vm.CurrentTime = 0;
-        playbackStart = vm.CurrentTime; playbackClock.Restart(); timer.Start();
+        if (playback.State == PlaybackState.Running) return;
+        editGeneration++;
+        committingEdit = true;
+        try
+        {
+            RepeatCountInput.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            if (Validation.GetHasError(RepeatCountInput) ||
+                !OperationsGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+                !OperationsGrid.CommitEdit(DataGridEditingUnit.Row, true))
+            {
+                vm.Status = "작업 입력과 반복 횟수를 확인하세요."; return;
+            }
+        }
+        finally { committingEdit = false; }
+        try
+        {
+            if (operationEditPending && playback.State == PlaybackState.Paused) ResetPlayback();
+            if (playback.State == PlaybackState.Paused)
+            {
+                playback.Resume(); playbackClock.Start();
+            }
+            else
+            {
+                vm.RefreshCalculationAfterEdit();
+                operationEditPending = false;
+                if (vm.TotalDuration <= 0) return;
+                playback.Start(vm.ScheduledOperations, vm.Machine, vm.PlaybackOptions);
+                playbackClock.Restart();
+            }
+            SyncPlayback(); timer.Start();
+        }
+        catch (InvalidOperationException error) { vm.Status = error.Message; }
     }
-    private void Pause_Click(object sender, RoutedEventArgs e) => timer.Stop();
-    private void Timer_Tick(object? sender, EventArgs e)
+    private void Pause_Click(object sender, RoutedEventArgs e) => PausePlayback();
+    private void PausePlayback()
     {
-        vm.CurrentTime = Math.Min(vm.TotalDuration, playbackStart + playbackClock.Elapsed.TotalSeconds);
-        if (vm.CurrentTime >= vm.TotalDuration) { vm.CurrentTime = vm.TotalDuration; timer.Stop(); }
+        if (playback.State == PlaybackState.Running) SamplePlayback();
+        timer.Stop(); playbackClock.Stop(); playback.Pause(); SyncPlayback();
+    }
+    private void Timer_Tick(object? sender, EventArgs e) => SamplePlayback();
+    private void SamplePlayback()
+    {
+        try { playback.Advance(playbackClock.Elapsed.TotalSeconds); }
+        catch (InvalidOperationException error) { playback.Stop(); vm.Status = error.Message; }
+        if (playback.State != PlaybackState.Running) { timer.Stop(); playbackClock.Stop(); }
+        SyncPlayback();
+    }
+    private void SyncPlayback()
+    {
+        vm.CurrentTime = playback.CycleTime;
+        vm.PlaybackActive = playback.State is PlaybackState.Running or PlaybackState.Paused;
+        var state = playback.State switch
+        {
+            PlaybackState.Running => "재생", PlaybackState.Paused => "일시정지",
+            PlaybackState.Stopped => "중지", PlaybackState.Completed => "완료", _ => "대기"
+        };
+        var target = vm.InfiniteRepeat ? "∞" : vm.RepeatCount.ToString();
+        vm.PlaybackProgress = $"{state} · 사이클 {playback.CurrentCycle}/{target} · 완료 {playback.CompletedCycles}회 · 누적 {playback.ElapsedSeconds:0.0} s";
     }
     private void DrawAll() { DrawTimeline(); DrawMachine(); }
     private void DrawTimeline()

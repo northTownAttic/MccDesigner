@@ -26,7 +26,13 @@
 <Border Grid.Row="0" Grid.Column="1" Background="White" CornerRadius="8" Padding="10" Margin="6,0,0,6"><DockPanel>
 <StackPanel DockPanel.Dock="Top">
 <DockPanel><Button DockPanel.Dock="Right" Content="설비 설정 (mm)" Command="{Binding EditMachineCommand}"/><TextBlock Text="설비 시뮬레이터" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/></DockPanel>
-<WrapPanel Margin="0,6,0,8"><Button Content="재생 ▶" Click="Play_Click"/><Button Content="일시정지 Ⅱ" Click="Pause_Click"/><Button Content="처음으로" Click="Reset_Click"/><TextBlock Text="{Binding CurrentTimeLabel}" Margin="8,0" VerticalAlignment="Center" FontWeight="SemiBold"/></WrapPanel>
+<WrapPanel Margin="0,6,0,8"><Button Content="재생 ▶" Click="Play_Click"/><Button Content="일시정지 Ⅱ" Click="Pause_Click"/><Button Content="중지 ■" Click="Stop_Click"/><Button Content="처음으로" Click="Reset_Click"/><TextBlock Text="{Binding CurrentTimeLabel}" Margin="8,0" VerticalAlignment="Center" FontWeight="SemiBold"/></WrapPanel>
+<WrapPanel IsEnabled="{Binding CanEditPlayback}" Margin="0,0,0,4">
+<TextBlock Text="반복 횟수" VerticalAlignment="Center"/>
+<TextBox x:Name="RepeatCountInput" Width="65" Text="{Binding RepeatCount, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}" ToolTip="1회는 단일 실행, 2회 이상은 복귀 위치를 검사합니다."/>
+<CheckBox Content="무한 반복" IsChecked="{Binding InfiniteRepeat}" VerticalAlignment="Center" Margin="8,0"/>
+</WrapPanel>
+<TextBlock Text="{Binding PlaybackProgress}" TextWrapping="Wrap" Foreground="#475569" Margin="0,0,0,5"/>
 </StackPanel>
 <Canvas x:Name="MachineCanvas" ClipToBounds="True" Background="#F8FAFC"/></DockPanel></Border>
 <Border Grid.Row="1" Grid.ColumnSpan="2" Background="White" CornerRadius="8" Padding="10" Margin="0,6"><DockPanel>
