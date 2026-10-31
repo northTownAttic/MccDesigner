@@ -1,34 +1,40 @@
 # MCC Designer MVP
-- .NET 8 Windows WPF, Visual Studio 2022
-- Edit operation names, resources, decimal durations, motion flags, start/end positions and target lane.
-- MCC chart, basic play/pause animation, JSON save/load.
-- Sketch-inspired machine view: Stage 1 and Stage 2 are horizontal lanes; gantry position moves along X; scanner head is displayed on selected lane.
-- Scheduling supports previous-row dependencies and parallel work with exclusive resource reservations. List order sets scheduling priority. The timeline is a planning visualization, not a machine controller or safety system.
-- Build: open `MccDesigner.sln`, restore, then press F5.
 
-## MVP reliability update
-- The application now opens MainWindow on startup.
-- Add/remove/edit recalculates the chart. Invalid operations clear stale results and show an error in the status bar.
-- Resource/lane dropdowns use explicit options. Decimal inputs commit after editing; fix numeric binding errors before using toolbar commands.
-- JSON is validated before replacing the current project, and invalid projects cannot be saved.
-- Playback uses a monotonic clock, stops on schedule changes/reset, and retains the last head position during idle time and after completion.
-- Timeline width follows the scroll viewport (minimum 900 px), so playback redraws do not accumulate width or stretch the time scale.
-- Position units remain the MVP's normalized X range 0–100; lane changes remain instantaneous.
+C# / .NET 8 Windows WPF + MVVM. Open `MccDesigner.sln` in Visual Studio 2022 with the .NET desktop workload, build, then press F5.
 
-## Validation
-Windows: install .NET 8 SDK and build `MccDesigner.sln`, then run MccDesigner.App.
-Linux compile check: `dotnet build MccDesigner.App/MccDesigner.App.csproj -p:EnableWindowsTargeting=true` (WPF UI execution requires Windows).
-Dependency-free engine regression checks: `dotnet run --project MccDesigner.Tests/MccDesigner.Tests.csproj`.
-The regression executable checks decimal timing, parallel scheduling, shared-resource conflicts, idle gap insertion, legacy JSON compatibility, invalid input, overflow, and idle/completed motion poses; any failed check exits with an error.
-Build outputs in bin/obj are excluded from Git tracking and ignored. Restore/build regenerates them locally; do not commit generated output files.
+## 장비 구조
+- 갠트리는 고정 구조물이며 X축으로 이동하지 않습니다.
+- Stage 1과 Stage 2는 각각 독립된 X축을 가집니다. 스캔 시 해당 스테이지가 X축으로 이동합니다.
+- Scanner Head는 Y축으로 1열과 2열 사이를 이동합니다. 해당 열의 스캔 중에는 Y 위치를 유지합니다.
+- 현재 위치는 실제 mm가 아닌 0–100 정규화 좌표입니다. 모든 축의 초기 위치는 0이며, Head Y=0은 1열, Y=100은 2열입니다.
 
-## Parallel scheduling and layout
-- Operation editor: upper left; machine simulator: upper right; MCC timeline: full width below.
-- **이전 완료 대기** (wait for previous): checked by default. The row waits for the immediately preceding row to finish. Uncheck to allow the operation to start at time zero or its earliest available resource slot. This is not a barrier waiting for all earlier rows.
-- **열 점유** (occupy target lane): applies to Gantry / Head operations. Keep checked for scans; they reserve both the shared gantry/head and selected stage. Clear for a pure head move that does not occupy the stage. Stage operations always reserve their own resource.
-- All required resources are reserved together for the entire operation; intervals use [start, end), so touching endpoints are allowed. Independent work may fill gaps before already-scheduled work. The result follows deterministic list priority, not global cycle-time optimization.
-- Use **위로 / 아래로** to change list priority and previous-row relationships. Moving/removing a row changes what the following row waits for.
-- Pale blue stage bars represent occupation by head operations; tooltips list all reserved resources. The simulator shows each stage's current operation.
-- The default example overlaps Stage 2 loading with Stage 1 work: cycle time is 37 s versus a sequential sum of 43.25 s.
-- Older JSON files without the new flags still run sequentially. New files persist both flags.
-- This version has no arbitrary dependency graph, automatic lane-transfer duration, position-continuity checks or acceleration-based motion profile yet. Specify intended preparation order explicitly; resource exclusion alone does not establish process readiness.
+## 작업 편집과 병렬 실행
+- 장비를 Stage 1/Stage 2로 선택하면 축 시작·끝은 X 위치, Scanner Head로 선택하면 Y 위치입니다. `이동`을 선택한 작업만 해당 축을 움직입니다.
+- 스테이지의 스캔 작업은 `헤드 사용`을 선택합니다. 스테이지와 단일 헤드를 동시에 점유하므로 스캔 중 헤드 이동이나 다른 스캔이 겹치지 않습니다. 이동 없는 노광/대기도 헤드를 점유할 수 있습니다.
+- 헤드의 열간 이동은 `Scanner Head`, `이동` 선택, Y 시작/끝과 소요시간으로 별도 입력합니다. 이 작업에는 `헤드 사용`을 선택하지 않습니다.
+- `이전 완료 대기`를 해제하면 시간 0부터 자원이 가능한 가장 이른 구간에 배정합니다. 선택하면 바로 이전 행 완료를 기다립니다. 전체 앞선 행에 대한 장벽은 아닙니다.
+- 목록 순서는 자원 배정 우선순위입니다. `위로/아래로`로 변경하며, 이동/삭제 시 이전 행 관계도 바뀝니다. 전역 최적화나 임의 선행 작업 그래프는 아직 없습니다.
+- 모든 자원을 전체 작업 구간 [시작, 종료)에 예약합니다. 독립 작업은 기존 예약 전의 빈 구간에도 들어갈 수 있습니다.
+- 각 축의 이전 종료 위치와 다음 시작 위치가 다르거나, 스캔할 열에 헤드가 없으면 계산 오류를 표시합니다. 복귀/Y 이동을 추가하거나 순서·이전 완료 대기를 조정하세요. 엔진이 위치 전환을 자동 생성하지는 않습니다.
+
+## 화면과 예제
+작업 편집기는 왼쪽 위, 시뮬레이터는 오른쪽 위, MCC 타임차트는 하단 전체 폭입니다. 연한 타임라인 막대는 스테이지 스캔에 의한 헤드 점유를 표시합니다.
+
+시뮬레이터에서 회색 갠트리는 고정되고 스테이지는 수평, 헤드는 수직으로 움직입니다. 스캔 중 헤드는 빨간색입니다. 대기/종료 시 마지막 위치를 유지하며 재생 시간은 단조 시계를 사용합니다.
+
+기본 예제는 Stage 2 로딩과 Stage 1 작업을 병렬 실행하고, Stage 1 스캔 후 헤드 Y 이동과 Stage 1 X 복귀도 겹칩니다. 순차 시간 합계 45.25초, 계산된 사이클 35.5초이며 헤드 Y 이동 2초가 포함됩니다.
+
+## 저장 형식
+JSON은 `FormatVersion: 2`, `AxisModel: FixedGantry_StageX_HeadY`, `Operations`를 가진 객체로 저장합니다. 새 파일은 축 모델과 헤드 사용/병렬 설정을 함께 보존합니다. 저장 전 검증하고, 불러온 데이터도 검증한 뒤 기존 목록을 교체합니다.
+
+이전 버전의 작업 배열 중 스테이지 작업은 읽을 수 있습니다. 이전 `Gantry / Head` 작업은 갠트리 X축을 움직이는 다른 모델이므로 자동으로 Y축으로 재해석하지 않습니다. 해당 파일은 명확한 오류를 표시하며 현재 프로젝트와 원본 파일을 보존합니다. 새 구조에 맞춰 스테이지 X 스캔과 헤드 Y 이동으로 다시 구성해야 합니다.
+
+## 검증
+- Windows: `dotnet build MccDesigner.sln` 후 실행 및 화면/조작 검증.
+- Linux 컴파일: `dotnet build MccDesigner.App/MccDesigner.App.csproj -p:EnableWindowsTargeting=true`. WPF 화면 실행에는 Windows가 필요합니다.
+- 계산 회귀 검사: `dotnet run --project MccDesigner.Tests/MccDesigner.Tests.csproj`. 실패 시 오류 코드로 종료하는 외부 패키지 없는 검사 프로그램입니다.
+- 검사 범위: 소수점 시간, 병렬 자원 점유, 빈 구간 배정, Stage X/Head Y 보간, 위치 연속성, 열 전환 선행 조건, 버전별 JSON, 잘못된 입력과 시간 오버플로.
+
+빌드 산출물 bin/obj는 Git 추적에서 제외돼 있고 `.gitignore`에 포함됩니다.
+
+현재 이동은 고정 시간 기반 선형 보간입니다. 가감속·저크 제한, 실제 축 단위/초기 위치 설정, 전체 선행 관계 편집과 Excel 연동은 후속 작업입니다. 본 프로그램은 설계 검토용이며 실제 장비 제어/안전 시스템이 아닙니다.

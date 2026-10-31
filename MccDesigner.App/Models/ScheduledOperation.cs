@@ -11,5 +11,5 @@ public sealed class ScheduledOperation
     public bool IsMotion { get; init; }
     public double StartPosition { get; init; }
     public double EndPosition { get; init; }
-    public string TargetLane { get; init; } = "Stage 1";
+    public bool RequiresScannerHead { get; init; }
 }

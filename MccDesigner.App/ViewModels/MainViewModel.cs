@@ -1,6 +1,5 @@
 using System.IO;
 using System.Collections.ObjectModel;
-using System.Text.Json;
 using System.Windows;
 using Microsoft.Win32;
 using MccDesigner.Models;
@@ -41,12 +40,7 @@ public sealed class MainViewModel : ObservableObject
         LoadCommand = new(LoadProject);
         ResetTimeCommand = new(() => CurrentTime = 0);
         Operations.CollectionChanged += (_, _) => { OnPropertyChanged(nameof(OperationCount)); RefreshSelectionCommands(); };
-        Operations.Add(new() { Name = "Stage 1 Loading", Resource = "Stage 1", DurationSeconds = 5.0 });
-        Operations.Add(new() { Name = "Stage 1 Vision", Resource = "Stage 1", DurationSeconds = 3.5 });
-        Operations.Add(new() { Name = "Scan Stage 1", Resource = "Gantry / Head", DurationSeconds = 12.5, IsMotion = true, StartPosition = 0, EndPosition = 100, TargetLane = "Stage 1" });
-        Operations.Add(new() { Name = "Gantry Return", Resource = "Gantry / Head", DurationSeconds = 3.5, IsMotion = true, StartPosition = 100, EndPosition = 0, TargetLane = "Stage 1", OccupiesTargetLane = false });
-        Operations.Add(new() { Name = "Stage 2 Loading", Resource = "Stage 2", DurationSeconds = 6.25, WaitForPrevious = false });
-        Operations.Add(new() { Name = "Scan Stage 2", Resource = "Gantry / Head", DurationSeconds = 12.5, IsMotion = true, StartPosition = 0, EndPosition = 100, TargetLane = "Stage 2" });
+        foreach (var operation in DemoProject.Create()) Operations.Add(operation);
         Calculate();
     }
     private void AddOperation()
@@ -86,7 +80,7 @@ public sealed class MainViewModel : ObservableObject
     {
         var dlg = new SaveFileDialog { Filter = "MCC 프로젝트 (*.json)|*.json", FileName = "MccProject.json" };
         if (dlg.ShowDialog() != true) return;
-        try { _scheduler.Calculate(Operations.ToList()); File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(Operations.ToList(), new JsonSerializerOptions { WriteIndented = true })); Status = $"저장 완료: {dlg.FileName}"; }
+        try { File.WriteAllText(dlg.FileName, ProjectSerializer.Serialize(Operations.ToList())); Status = $"저장 완료: {dlg.FileName}"; }
         catch (Exception ex) { Status = $"저장 실패: {ex.Message}"; MessageBox.Show(Status); }
     }
     private void LoadProject()
@@ -94,7 +88,7 @@ public sealed class MainViewModel : ObservableObject
         var dlg = new OpenFileDialog { Filter = "MCC 프로젝트 (*.json)|*.json" };
         if (dlg.ShowDialog() != true) return;
         try {
-            var loaded = JsonSerializer.Deserialize<List<OperationDefinition>>(File.ReadAllText(dlg.FileName)) ?? throw new InvalidOperationException("작업 데이터가 없습니다.");
+            var loaded = ProjectSerializer.Deserialize(File.ReadAllText(dlg.FileName));
             var calculated = _scheduler.Calculate(loaded);
             Operations.Clear(); foreach (var op in loaded) Operations.Add(op);
             SelectedOperation = null; ScheduledOperations = calculated; CurrentTime = 0; Status = $"불러오기 완료: {dlg.FileName}";
