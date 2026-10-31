@@ -20,7 +20,7 @@ Windows: install .NET 8 SDK and build `MccDesigner.sln`, then run MccDesigner.Ap
 Linux compile check: `dotnet build MccDesigner.App/MccDesigner.App.csproj -p:EnableWindowsTargeting=true` (WPF UI execution requires Windows).
 Dependency-free engine regression checks: `dotnet run --project MccDesigner.Tests/MccDesigner.Tests.csproj`.
 The regression executable checks decimal timing, parallel scheduling, shared-resource conflicts, idle gap insertion, legacy JSON compatibility, invalid input, overflow, and idle/completed motion poses; any failed check exits with an error.
-Existing tracked bin/obj files were left untouched; future generated outputs are ignored.
+Build outputs in bin/obj are excluded from Git tracking and ignored. Restore/build regenerates them locally; do not commit generated output files.
 
 ## Parallel scheduling and layout
 - Operation editor: upper left; machine simulator: upper right; MCC timeline: full width below.
