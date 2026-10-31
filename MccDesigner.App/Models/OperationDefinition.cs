@@ -1,6 +1,24 @@
+using System.ComponentModel;
+using System.Text.Json.Serialization;
+
 namespace MccDesigner.Models;
-public sealed class OperationDefinition
+public sealed class OperationDefinition : INotifyPropertyChanged
 {
+    private Guid _predecessorId;
+    public event PropertyChangedEventHandler? PropertyChanged;
+    /// <summary>Guid.Empty uses the legacy previous-row setting. An explicit predecessor replaces it.</summary>
+    public Guid PredecessorId
+    {
+        get => _predecessorId;
+        set
+        {
+            if (_predecessorId == value) return;
+            _predecessorId = value;
+            PropertyChanged?.Invoke(this, new(nameof(PredecessorId)));
+            PropertyChanged?.Invoke(this, new(nameof(HasExplicitPredecessor)));
+        }
+    }
+    [JsonIgnore] public bool HasExplicitPredecessor => PredecessorId != Guid.Empty;
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "New operation";
     public string Resource { get; set; } = "Stage 1";

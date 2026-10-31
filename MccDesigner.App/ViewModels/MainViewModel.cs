@@ -28,6 +28,7 @@ public sealed class MainViewModel : ObservableObject
     public MachineSettings Machine { get; private set; } = new();
     public string AxisHint => $"위치 단위: mm · Stage=X / Head=Y · 1열 Y={Machine.Stage1Y:0.###} / 2열 Y={Machine.Stage2Y:0.###}";
     public RelayCommand EditMachineCommand { get; }
+    public ObservableCollection<DependencyChoice> PredecessorChoices { get; } = [new(Guid.Empty, "기본 (이전 완료 대기 설정)")];
     public ObservableCollection<OperationDefinition> Operations { get; } = new();
     public IReadOnlyDictionary<Guid, double> OperationEndTimes { get; private set; } = new Dictionary<Guid, double>();
     public IReadOnlyList<ScheduledOperation> ScheduledOperations
@@ -105,9 +106,34 @@ public sealed class MainViewModel : ObservableObject
         SelectedOperation = selected;
         Calculate();
     }
+    private void RefreshPredecessorChoices(IReadOnlyList<OperationDefinition>? source = null)
+    {
+        source ??= Operations.ToList();
+        var labels = new Dictionary<Guid, string> { [Guid.Empty] = "기본 (이전 완료 대기 설정)" };
+        for (var i = 0; i < source.Count; i++)
+            if (source[i].Id != Guid.Empty) labels.TryAdd(source[i].Id, $"{i + 1}. {source[i].Name}");
+        foreach (var op in source.Where(op => op.HasExplicitPredecessor))
+            labels.TryAdd(op.PredecessorId, $"누락된 작업 ({op.PredecessorId.ToString()[..8]})");
+        // Retain choice instances and dangling references so UI refresh cannot silently erase a dependency.
+        foreach (var choice in PredecessorChoices.ToList())
+            if (!labels.ContainsKey(choice.Id)) PredecessorChoices.Remove(choice);
+        foreach (var (id, label) in labels)
+        {
+            var choice = PredecessorChoices.FirstOrDefault(x => x.Id == id);
+            if (choice is null) PredecessorChoices.Add(new(id, label));
+            else choice.Label = label;
+        }
+        var orderedIds = labels.Keys.ToList();
+        for (var i = 0; i < orderedIds.Count; i++)
+        {
+            var current = PredecessorChoices.IndexOf(PredecessorChoices.First(x => x.Id == orderedIds[i]));
+            if (current != i) PredecessorChoices.Move(current, i);
+        }
+    }
     public void RefreshCalculationAfterEdit() { OnPropertyChanged(nameof(OperationCount)); Calculate(); }
     private void Calculate()
     {
+        RefreshPredecessorChoices();
         try { ScheduledOperations = _scheduler.Calculate(Operations.ToList(), Machine); CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 총 {TotalDuration:0.###}초 (순차 합계 {Operations.Sum(x => x.DurationSeconds):0.###}초)"; }
         catch (Exception ex) { ScheduledOperations = Array.Empty<ScheduledOperation>(); CurrentTime = 0; Status = $"계산 오류: {ex.Message}"; }
     }
@@ -127,6 +153,7 @@ public sealed class MainViewModel : ObservableObject
             var calculated = _scheduler.Calculate(loaded.Operations, loaded.Machine);
             RepeatCount = loaded.Playback.RepeatCount; InfiniteRepeat = loaded.Playback.Infinite;
             Machine = loaded.Machine; OnPropertyChanged(nameof(Machine)); OnPropertyChanged(nameof(AxisHint));
+            RefreshPredecessorChoices(loaded.Operations);
             Operations.Clear(); foreach (var op in loaded.Operations) Operations.Add(op);
             SelectedOperation = null; ScheduledOperations = calculated; CurrentTime = 0; Status = $"불러오기 완료: {dlg.FileName}" + (loaded.ImportedLegacyUnits ? " · 이전 좌표값을 변경 없이 1단위=1 mm로 읽었습니다. 설비 설정을 확인하세요." : "");
         } catch (Exception ex) { Status = $"불러오기 실패: {ex.Message}"; MessageBox.Show(Status); }

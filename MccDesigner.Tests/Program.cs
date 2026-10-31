@@ -328,4 +328,71 @@ Check("correcting draft restores strict applicability", () => {
     m.HeadX=40; m.Validate(); Equal(0,m.GetValidationErrors().Count);
     ProjectSerializer.DeserializeProject(ProjectSerializer.Serialize([],m));
 });
+Check("shared scan predecessor starts head transfer and unload together after scan2", () => {
+    var loading=Work(MachineAxes.Stage1,1); var vision=Move(MachineAxes.Stage1,2,0,20);
+    var prep2=Work(MachineAxes.Stage2,2); // Creates an earlier idle Stage1 gap, which unload must not fill.
+    var scan1=Move(MachineAxes.Stage1,3.8,20,60); scan1.RequiresScannerHead=true;
+    var returning=Move(MachineAxes.Stage1,.7,60,20);
+    var scan2=Move(MachineAxes.Stage1,3.8,20,60); scan2.RequiresScannerHead=true;
+    var transfer=Move(MachineAxes.Head,1.7); transfer.PredecessorId=scan2.Id;
+    var unload=Move(MachineAxes.Stage1,1,60,100); unload.PredecessorId=scan2.Id;
+    var home=Move(MachineAxes.Stage1,2,100,0);
+    var r=scheduler.Calculate([loading,vision,prep2,scan1,returning,scan2,transfer,unload,home]);
+    Equal(r[5].EndTime,r[6].StartTime); Equal(r[5].EndTime,r[7].StartTime);
+    Equal(r[7].EndTime,r[8].StartTime); Equal(1.7,r[6].Duration);
+});
+Check("explicit predecessor replaces previous row wait", () => {
+    var prerequisite=Work(MachineAxes.Stage1,5); var unrelated=Work(MachineAxes.Stage2,100);
+    var child=Work(MachineAxes.Stage1,2); child.PredecessorId=prerequisite.Id;
+    var r=scheduler.Calculate([prerequisite,unrelated,child]); Equal(5,r[2].StartTime);
+});
+Check("explicit predecessor also waits when previous checkbox is off", () => {
+    var prerequisite=Work(MachineAxes.Stage1,5); var child=Work(MachineAxes.Stage2,2);
+    child.WaitForPrevious=false; child.PredecessorId=prerequisite.Id;
+    Equal(5,scheduler.Calculate([prerequisite,child])[1].StartTime);
+});
+Check("later-row predecessor is topologically resolved preserving result row order", () => {
+    var prerequisite=Work(MachineAxes.Stage2,5); prerequisite.WaitForPrevious=false;
+    var child=Work(MachineAxes.Stage1,2); child.PredecessorId=prerequisite.Id;
+    var r=scheduler.Calculate([child,prerequisite]); Equal(5,r[0].StartTime); Equal(0,r[1].StartTime);
+    Assert(r[0].Id==child.Id && r[1].Id==prerequisite.Id);
+});
+Check("same resource still serializes children sharing predecessor", () => {
+    var prerequisite=Work(MachineAxes.Stage1,3); var a=Work(MachineAxes.Stage2,4); var b=Work(MachineAxes.Stage2,2);
+    a.PredecessorId=prerequisite.Id; b.PredecessorId=prerequisite.Id;
+    var r=scheduler.Calculate([prerequisite,a,b]); Equal(3,r[1].StartTime); Equal(7,r[2].StartTime);
+});
+Check("reject missing and self predecessor", () => {
+    var op=Work(); op.PredecessorId=Guid.NewGuid(); Reject(()=>scheduler.Calculate([op]));
+    op.PredecessorId=op.Id; Reject(()=>scheduler.Calculate([op]));
+});
+Check("reject explicit dependency cycle", () => {
+    var a=Work(); var b=Work(MachineAxes.Stage2); a.PredecessorId=b.Id; b.PredecessorId=a.Id;
+    Reject(()=>scheduler.Calculate([a,b]));
+});
+Check("reject cycle involving implicit previous-row edge", () => {
+    var a=Work(); var b=Work(MachineAxes.Stage2); a.PredecessorId=b.Id;
+    Reject(()=>scheduler.Calculate([a,b]));
+});
+Check("deleting predecessor reports missing reference instead of running early", () => {
+    var parent=Work(); var child=Work(MachineAxes.Stage2); child.PredecessorId=parent.Id;
+    scheduler.Calculate([parent,child]); Reject(()=>scheduler.Calculate([child]));
+});
+Check("explicit references survive reordering and JSON roundtrip", () => {
+    var parent=Work(MachineAxes.Stage2,5); parent.WaitForPrevious=false;
+    var child=Work(MachineAxes.Stage1,2); child.PredecessorId=parent.Id;
+    var copy=ProjectSerializer.Deserialize(ProjectSerializer.Serialize([child,parent]));
+    Assert(copy[0].PredecessorId==copy[1].Id); Equal(5,scheduler.Calculate(copy)[0].StartTime);
+});
+Check("clearing explicit predecessor restores previous-row behavior", () => {
+    var parent=Work(MachineAxes.Stage1,3); var middle=Work(MachineAxes.Stage2,10); var child=Work(MachineAxes.Stage1);
+    child.PredecessorId=parent.Id; Equal(3,scheduler.Calculate([parent,middle,child])[2].StartTime);
+    child.PredecessorId=Guid.Empty; Equal(13,scheduler.Calculate([parent,middle,child])[2].StartTime);
+});
+Check("explicit reference notifications update checkbox state and are not saved as derived flags", () => {
+    var op=Work(); var changed=new List<string?>(); op.PropertyChanged+=(_,e)=>changed.Add(e.PropertyName);
+    op.PredecessorId=Guid.NewGuid(); Assert(op.HasExplicitPredecessor);
+    Assert(changed.Contains(nameof(OperationDefinition.HasExplicitPredecessor)));
+    var json=System.Text.Json.JsonSerializer.Serialize(op); Assert(!json.Contains("HasExplicitPredecessor"));
+});
 Console.WriteLine($"{passed} checks passed.");

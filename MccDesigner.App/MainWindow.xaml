@@ -1,5 +1,11 @@
 <Window x:Class="MccDesigner.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:MccDesigner" xmlns:converters="clr-namespace:MccDesigner.Converters" PreviewMouseDown="Window_PreviewMouseDown" Title="MCC Designer MVP" Height="1080" Width="1920" WindowState="Maximized" WindowStyle="None" ResizeMode="NoResize" Background="#F1F5F9">
-<Window.Resources><converters:OperationEndTimeConverter x:Key="OperationEndTime"/></Window.Resources>
+<Window.Resources><converters:OperationEndTimeConverter x:Key="OperationEndTime"/><Style x:Key="PreviousWaitDisplay" TargetType="CheckBox" BasedOn="{x:Static DataGridCheckBoxColumn.DefaultElementStyle}">
+<Style.Triggers><DataTrigger Binding="{Binding HasExplicitPredecessor}" Value="True"><Setter Property="IsEnabled" Value="False"/></DataTrigger></Style.Triggers>
+</Style>
+<Style x:Key="PreviousWaitEditing" TargetType="CheckBox" BasedOn="{x:Static DataGridCheckBoxColumn.DefaultEditingElementStyle}">
+<Style.Triggers><DataTrigger Binding="{Binding HasExplicitPredecessor}" Value="True"><Setter Property="IsEnabled" Value="False"/></DataTrigger></Style.Triggers>
+</Style>
+</Window.Resources>
 <Viewbox Stretch="Uniform"><Grid Width="1920" Height="1080"><DockPanel>
 <Border DockPanel.Dock="Top" Background="#0F172A" Padding="16"><DockPanel>
 <StackPanel><TextBlock Text="MCC Designer" FontSize="24" FontWeight="SemiBold" Foreground="White"/><TextBlock Text="Machine Cycle Chart · MVP" Foreground="#CBD5E1"/></StackPanel>
@@ -12,9 +18,10 @@
 <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
 <TextBlock Text="작업 편집 · Stage=X / Head=Y" FontSize="16" FontWeight="SemiBold"/>
 <TextBlock Text="{Binding AxisHint}" TextWrapping="Wrap" Foreground="#64748B"/>
+<TextBlock Text="선행 작업을 직접 선택하면 ‘이전 완료 대기’ 대신 해당 작업의 완료를 기다립니다." TextWrapping="Wrap" Foreground="#475569"/>
 <StackPanel Orientation="Horizontal"><Button Content="위로 ↑" Command="{Binding MoveUpCommand}"/><Button Content="아래로 ↓" Command="{Binding MoveDownCommand}"/><TextBlock Text="목록 순서 = 자원 배정 우선순위" VerticalAlignment="Center" Foreground="#64748B"/></StackPanel>
 </StackPanel>
-<DataGrid x:Name="OperationsGrid" ItemsSource="{Binding Operations}" SelectedItem="{Binding SelectedOperation}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" RowHeaderWidth="0" CellEditEnding="OperationsGrid_CellEditEnding" CommandManager.PreviewExecuted="OperationsGrid_PreviewExecuted">
+<DataGrid x:Name="OperationsGrid" ItemsSource="{Binding Operations}" SelectedItem="{Binding SelectedOperation}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserSortColumns="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" RowHeaderWidth="0" CellEditEnding="OperationsGrid_CellEditEnding" CommandManager.PreviewExecuted="OperationsGrid_PreviewExecuted">
 <DataGrid.Columns>
 <DataGridTextColumn Header="작업" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
 <DataGridComboBoxColumn Header="장비" SelectedItemBinding="{Binding Resource, UpdateSourceTrigger=PropertyChanged}" Width="110" ItemsSource="{x:Static local:EditorOptions.Resources}"/>
@@ -28,7 +35,15 @@
 </TextBlock>
 </DataTemplate></DataGridTemplateColumn.CellTemplate>
 </DataGridTemplateColumn>
-<DataGridCheckBoxColumn Header="이전 완료 대기" Binding="{Binding WaitForPrevious, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+<DataGridTemplateColumn Header="선행 작업" Width="190">
+<DataGridTemplateColumn.CellTemplate><DataTemplate>
+<ComboBox ItemsSource="{Binding DataContext.PredecessorChoices, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}" SelectedValue="{Binding PredecessorId, Mode=OneWay}" SelectedValuePath="Id" DisplayMemberPath="Label" IsHitTestVisible="False" Focusable="False" BorderThickness="0" Background="Transparent"/>
+</DataTemplate></DataGridTemplateColumn.CellTemplate>
+<DataGridTemplateColumn.CellEditingTemplate><DataTemplate>
+<ComboBox ItemsSource="{Binding DataContext.PredecessorChoices, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}" SelectedValue="{Binding PredecessorId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" SelectedValuePath="Id" DisplayMemberPath="Label" MaxDropDownHeight="300" ToolTip="기본: 이전 완료 대기 설정 사용. 작업 선택: 해당 작업이 끝난 후 자원이 가능할 때 실행."/>
+</DataTemplate></DataGridTemplateColumn.CellEditingTemplate>
+</DataGridTemplateColumn>
+<DataGridCheckBoxColumn Header="이전 완료 대기" ElementStyle="{StaticResource PreviousWaitDisplay}" EditingElementStyle="{StaticResource PreviousWaitEditing}" Binding="{Binding WaitForPrevious, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
 <DataGridCheckBoxColumn Header="헤드 사용" Binding="{Binding RequiresScannerHead, UpdateSourceTrigger=PropertyChanged}" Width="65"/>
 <DataGridCheckBoxColumn Header="이동" Binding="{Binding IsMotion, UpdateSourceTrigger=PropertyChanged}" Width="50"/>
 <DataGridTextColumn Header="시작(mm)" Binding="{Binding StartPosition, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True, StringFormat=0.###}" Width="65"/>
