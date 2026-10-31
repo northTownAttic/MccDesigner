@@ -208,4 +208,57 @@ Check("invalid saved repetition count rejected", () => {
     var root=System.Text.Json.Nodes.JsonNode.Parse(ProjectSerializer.Serialize(DemoProject.Create()))!; root["Playback"]!["RepeatCount"]=0;
     Reject(()=>ProjectSerializer.DeserializeProject(root.ToJsonString()));
 });
+Check("seek pauses running session and updates machine pose", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new()); session.Advance(5); session.SeekCycleTime(14.75);
+    Assert(session.State==PlaybackState.Paused); Equal(14.75,session.CycleTime); Equal(14.75,session.ElapsedSeconds);
+    var pose=MachineStateEvaluator.Evaluate(closedCycle,session.CycleTime); Equal(50,pose.Stage1X); Equal(0,pose.HeadY);
+});
+Check("seek backward and resume uses selected offset", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){RepeatCount=3}); session.Advance(50);
+    session.SeekCycleTime(3); Equal(2,session.CurrentCycle); Equal(1,session.CompletedCycles); Equal(42,session.ElapsedSeconds);
+    session.Resume(); session.Advance(44); Equal(5,session.CycleTime); Equal(2,session.CurrentCycle);
+});
+Check("seek final endpoint completes and dragging back reopens same cycle", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new()); session.SeekCycleTime(39);
+    Assert(session.State==PlaybackState.Completed); Equal(1,session.CompletedCycles);
+    session.SeekCycleTime(10); Assert(session.State==PlaybackState.Paused); Equal(0,session.CompletedCycles); Equal(10,session.ElapsedSeconds);
+});
+Check("seek boundary in infinite mode resumes next cycle", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){Infinite=true}); session.Advance(83);
+    session.SeekCycleTime(39); Assert(session.State==PlaybackState.Paused); Equal(3,session.CompletedCycles); Equal(117,session.ElapsedSeconds);
+    session.Resume(); session.Advance(117.25); Equal(4,session.CurrentCycle); Equal(.25,session.CycleTime);
+});
+Check("seek from stopped state enables continuation", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new()); session.Advance(5); session.Stop();
+    session.SeekCycleTime(10); session.Resume(); session.Advance(11); Equal(11,session.CycleTime);
+});
+Check("selected starting time respects repeat validation", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new(){RepeatCount=2},10);
+    Equal(10,session.CycleTime); Equal(10,session.ElapsedSeconds); session.Advance(11); Equal(11,session.CycleTime);
+    Reject(()=>session.Start(scheduler.Calculate([Move()]),new(),new(){RepeatCount=2},1));
+});
+Check("timeline click and cursor coordinates agree after resize", () => {
+    foreach(var width in new[]{500d,900d,1400d}) {
+        var layout=new TimelineLayout(width,39);
+        Equal(14.75,layout.TimeAt(layout.XAt(14.75))); Equal(0,layout.TimeAt(0)); Equal(39,layout.TimeAt(layout.Width+100));
+        Equal(39,layout.TimeAt(layout.XAt(39))); Equal(900,Math.Min(900,layout.Width));
+    }
+});
+Check("timeline subsecond and empty duration are bounded", () => {
+    var layout=new TimelineLayout(900,.25); Equal(.25,layout.TimeAt(875)); Equal(.125,layout.TimeAt(layout.XAt(.125)));
+    Equal(0,new TimelineLayout(900,0).TimeAt(500));
+});
+Check("invalid seek times leave session intact", () => {
+    var session=new PlaybackSession(); session.Start(closedCycle,new(),new()); session.Advance(5);
+    foreach(var invalid in new[]{-1d,40,double.NaN,double.PositiveInfinity}) {
+        try { session.SeekCycleTime(invalid); } catch(ArgumentOutOfRangeException) { Equal(5,session.CycleTime); continue; }
+        throw new Exception("Expected invalid seek rejection");
+    }
+});
+Check("simulator zoom enlarges actual mm geometry without changing aspect", () => {
+    var normal=new MachineProjection(new(),500,250); var enlarged=new MachineProjection(new(),500,250,2);
+    Equal(2*(normal.X(60)-normal.X(20)),enlarged.X(60)-enlarged.X(20));
+    Equal(2*(normal.Y(0)-normal.Y(100)),enlarged.Y(0)-enlarged.Y(100));
+    Equal(enlarged.X(60)-enlarged.X(20),enlarged.Y(20)-enlarged.Y(60));
+});
 Console.WriteLine($"{passed} checks passed.");

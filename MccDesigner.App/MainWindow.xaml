@@ -33,10 +33,16 @@
 <CheckBox Content="무한 반복" IsChecked="{Binding InfiniteRepeat}" VerticalAlignment="Center" Margin="8,0"/>
 </WrapPanel>
 <TextBlock Text="{Binding PlaybackProgress}" TextWrapping="Wrap" Foreground="#475569" Margin="0,0,0,5"/>
+<DockPanel Margin="0,0,0,5">
+<Button DockPanel.Dock="Right" Content="화면 맞춤" Click="FitMachine_Click"/>
+<TextBlock DockPanel.Dock="Left" Text="확대" VerticalAlignment="Center" Margin="0,0,6,0"/>
+<TextBlock DockPanel.Dock="Right" Text="{Binding SimulatorZoom, StringFormat={}{0:0}%}" Width="45" VerticalAlignment="Center" Margin="6,0"/>
+<Slider Minimum="100" Maximum="400" TickFrequency="25" IsSnapToTickEnabled="True" Value="{Binding SimulatorZoom, Mode=TwoWay}" VerticalAlignment="Center" ToolTip="100% 화면 맞춤 ~ 400% 확대; 스크롤바로 설비 위치를 이동합니다."/>
+</DockPanel>
 </StackPanel>
-<Canvas x:Name="MachineCanvas" ClipToBounds="True" Background="#F8FAFC"/></DockPanel></Border>
+<ScrollViewer x:Name="MachineScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" CanContentScroll="False" Background="#F8FAFC"><Canvas x:Name="MachineCanvas" HorizontalAlignment="Left" VerticalAlignment="Top" ClipToBounds="True" Background="#F8FAFC"/></ScrollViewer></DockPanel></Border>
 <Border Grid.Row="1" Grid.ColumnSpan="2" Background="White" CornerRadius="8" Padding="10" Margin="0,6"><DockPanel>
-<StackPanel DockPanel.Dock="Top"><TextBlock Text="MCC 타임차트" FontSize="16" FontWeight="SemiBold"/><TextBlock Text="이전 작업 완료 조건과 공유 자원을 반영한 일정 · 연한 막대는 스캔 중 헤드 점유" TextWrapping="Wrap" Foreground="#64748B" Margin="0,3,0,6"/></StackPanel>
-<ScrollViewer x:Name="TimelineScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"><Canvas x:Name="TimelineCanvas" Height="210" Width="900" Background="#F8FAFC"/></ScrollViewer></DockPanel></Border>
+<StackPanel DockPanel.Dock="Top"><TextBlock Text="MCC 타임차트" FontSize="16" FontWeight="SemiBold"/><TextBlock Text="클릭·드래그: 시간 탐색 (일시정지) · 연한 막대: 스캔 중 헤드 점유" TextWrapping="Wrap" Foreground="#64748B" Margin="0,3,0,6"/></StackPanel>
+<ScrollViewer x:Name="TimelineScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"><Canvas x:Name="TimelineCanvas" Cursor="ScrollWE" MouseLeftButtonDown="Timeline_MouseDown" MouseMove="Timeline_MouseMove" MouseLeftButtonUp="Timeline_MouseUp" LostMouseCapture="Timeline_LostCapture" Height="210" Width="900" Background="#F8FAFC"/></ScrollViewer></DockPanel></Border>
 <Border Grid.Row="2" Grid.ColumnSpan="2" Background="#E2E8F0" CornerRadius="6" Padding="10"><TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="#334155"/></Border>
 </Grid></DockPanel></Window>

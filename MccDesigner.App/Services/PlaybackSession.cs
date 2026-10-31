@@ -14,17 +14,19 @@ public sealed class PlaybackSession
     public long CompletedCycles { get; private set; }
     public long CurrentCycle { get; private set; } = 1;
 
-    public void Start(IReadOnlyList<ScheduledOperation> schedule, MachineSettings machine, PlaybackOptions requested)
+    public void Start(IReadOnlyList<ScheduledOperation> schedule, MachineSettings machine, PlaybackOptions requested, double initialTime = 0)
     {
         requested.Validate();
         var cycleDuration = schedule.Count == 0 ? 0 : schedule.Max(x => x.EndTime);
         if (!double.IsFinite(cycleDuration) || cycleDuration <= 0)
             throw new InvalidOperationException("계산된 작업이 없습니다. 작업을 확인하고 MCC를 계산하세요.");
+        if (!double.IsFinite(initialTime) || initialTime < 0 || initialTime > cycleDuration)
+            throw new ArgumentOutOfRangeException(nameof(initialTime));
         if (requested.Infinite || requested.RepeatCount > 1) ValidateCycleClosure(schedule, machine);
         if (!requested.Infinite && !double.IsFinite(cycleDuration * requested.RepeatCount))
             throw new InvalidOperationException("전체 반복 시간이 너무 큽니다.");
         options = requested.Copy(); duration = cycleDuration;
-        Reset(); State = PlaybackState.Running;
+        Reset(); State = PlaybackState.Running; Advance(initialTime);
     }
     public static void ValidateCycleClosure(IReadOnlyList<ScheduledOperation> schedule, MachineSettings machine)
     {
@@ -56,6 +58,16 @@ public sealed class PlaybackSession
         if (completed >= long.MaxValue - 1d) throw new InvalidOperationException("반복 카운터 범위를 초과했습니다.");
         ElapsedSeconds = elapsedSeconds; CompletedCycles = (long)completed;
         CurrentCycle = CompletedCycles + 1; CycleTime = elapsedSeconds % duration;
+    }
+    public void SeekCycleTime(double time)
+    {
+        if (State == PlaybackState.Ready) throw new InvalidOperationException("재생 세션을 먼저 시작하세요.");
+        if (!double.IsFinite(time) || time < 0 || time > duration) throw new ArgumentOutOfRangeException(nameof(time));
+        CycleTime = time;
+        CompletedCycles = CurrentCycle - 1 + (time == duration ? 1 : 0);
+        ElapsedSeconds = (CurrentCycle - 1) * duration + time;
+        State = !options.Infinite && CurrentCycle == options.RepeatCount && time == duration
+            ? PlaybackState.Completed : PlaybackState.Paused;
     }
     public void Pause() { if (State == PlaybackState.Running) State = PlaybackState.Paused; }
     public void Resume() { if (State == PlaybackState.Paused) State = PlaybackState.Running; }

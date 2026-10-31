@@ -13,6 +13,8 @@ public sealed class MainViewModel : ObservableObject
     private IReadOnlyList<ScheduledOperation> _scheduled = Array.Empty<ScheduledOperation>();
     private string _status = "작업을 편집한 뒤 MCC 계산을 누르세요.";
     private double _currentTime;
+    private double _simulatorZoom = 200;
+    public double SimulatorZoom { get => _simulatorZoom; set => SetProperty(ref _simulatorZoom, double.IsFinite(value) ? Math.Clamp(value, 100, 400) : 200); }
     private int _repeatCount = 1;
     private bool _infiniteRepeat;
     private bool _playbackActive;
