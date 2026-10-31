@@ -9,7 +9,7 @@
 <Border Grid.Row="0" Grid.Column="0" Background="White" CornerRadius="8" Padding="10" Margin="0,0,6,6"><DockPanel>
 <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
 <TextBlock Text="작업 편집 · Stage=X / Head=Y" FontSize="16" FontWeight="SemiBold"/>
-<TextBlock Text="이전 완료 대기 해제: 병렬 실행 · 헤드 사용: 스테이지 스캔 · Y 0=1열 / 100=2열" TextWrapping="Wrap" Foreground="#64748B"/>
+<TextBlock Text="{Binding AxisHint}" TextWrapping="Wrap" Foreground="#64748B"/>
 <StackPanel Orientation="Horizontal"><Button Content="위로 ↑" Command="{Binding MoveUpCommand}"/><Button Content="아래로 ↓" Command="{Binding MoveDownCommand}"/><TextBlock Text="목록 순서 = 자원 배정 우선순위" VerticalAlignment="Center" Foreground="#64748B"/></StackPanel>
 </StackPanel>
 <DataGrid x:Name="OperationsGrid" ItemsSource="{Binding Operations}" SelectedItem="{Binding SelectedOperation}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" RowHeaderWidth="0" CellEditEnding="OperationsGrid_CellEditEnding" CommandManager.PreviewExecuted="OperationsGrid_PreviewExecuted">
@@ -20,15 +20,15 @@
 <DataGridCheckBoxColumn Header="이전 완료 대기" Binding="{Binding WaitForPrevious, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
 <DataGridCheckBoxColumn Header="헤드 사용" Binding="{Binding RequiresScannerHead, UpdateSourceTrigger=PropertyChanged}" Width="65"/>
 <DataGridCheckBoxColumn Header="이동" Binding="{Binding IsMotion, UpdateSourceTrigger=PropertyChanged}" Width="50"/>
-<DataGridTextColumn Header="축 시작" Binding="{Binding StartPosition, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True, StringFormat=0.###}" Width="65"/>
-<DataGridTextColumn Header="축 끝" Binding="{Binding EndPosition, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True, StringFormat=0.###}" Width="65"/>
+<DataGridTextColumn Header="시작(mm)" Binding="{Binding StartPosition, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True, StringFormat=0.###}" Width="65"/>
+<DataGridTextColumn Header="끝(mm)" Binding="{Binding EndPosition, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True, StringFormat=0.###}" Width="65"/>
 </DataGrid.Columns></DataGrid></DockPanel></Border>
 <Border Grid.Row="0" Grid.Column="1" Background="White" CornerRadius="8" Padding="10" Margin="6,0,0,6"><DockPanel>
 <StackPanel DockPanel.Dock="Top">
-<TextBlock Text="설비 시뮬레이터" FontSize="16" FontWeight="SemiBold"/>
+<DockPanel><Button DockPanel.Dock="Right" Content="설비 설정 (mm)" Command="{Binding EditMachineCommand}"/><TextBlock Text="설비 시뮬레이터" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/></DockPanel>
 <WrapPanel Margin="0,6,0,8"><Button Content="재생 ▶" Click="Play_Click"/><Button Content="일시정지 Ⅱ" Click="Pause_Click"/><Button Content="처음으로" Click="Reset_Click"/><TextBlock Text="{Binding CurrentTimeLabel}" Margin="8,0" VerticalAlignment="Center" FontWeight="SemiBold"/></WrapPanel>
 </StackPanel>
-<Canvas x:Name="MachineCanvas" Height="150" Background="#F8FAFC"/></DockPanel></Border>
+<Canvas x:Name="MachineCanvas" ClipToBounds="True" Background="#F8FAFC"/></DockPanel></Border>
 <Border Grid.Row="1" Grid.ColumnSpan="2" Background="White" CornerRadius="8" Padding="10" Margin="0,6"><DockPanel>
 <StackPanel DockPanel.Dock="Top"><TextBlock Text="MCC 타임차트" FontSize="16" FontWeight="SemiBold"/><TextBlock Text="이전 작업 완료 조건과 공유 자원을 반영한 일정 · 연한 막대는 스캔 중 헤드 점유" TextWrapping="Wrap" Foreground="#64748B" Margin="0,3,0,6"/></StackPanel>
 <ScrollViewer x:Name="TimelineScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"><Canvas x:Name="TimelineCanvas" Height="210" Width="900" Background="#F8FAFC"/></ScrollViewer></DockPanel></Border>

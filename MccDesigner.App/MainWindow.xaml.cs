@@ -25,10 +25,11 @@ public partial class MainWindow : Window
         TimelineScrollViewer.ScrollChanged += (_, e) => {
             if (e.ViewportWidthChange != 0) DrawTimeline();
         };
+        MachineCanvas.SizeChanged += (_, _) => DrawMachine();
         timer.Tick += Timer_Tick;
         vm.PropertyChanged += (_, e) => {
-            if (e.PropertyName == nameof(MainViewModel.ScheduledOperations)) timer.Stop();
-            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.CurrentTime)) DrawAll();
+            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine)) timer.Stop();
+            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.CurrentTime) or nameof(MainViewModel.Machine)) DrawAll();
         };
         Closed += (_, _) => { timer.Stop(); playbackClock.Stop(); };
         Loaded += (_, _) => DrawAll();
@@ -49,6 +50,7 @@ public partial class MainWindow : Window
         DependencyObject? source = e.OriginalSource as DependencyObject;
         while (source != null && source is not Button) source = VisualTreeHelper.GetParent(source);
         if (source is not Button { Command: not null }) return;
+        timer.Stop();
         committingEdit = true;
         try
         {
@@ -110,35 +112,46 @@ public partial class MainWindow : Window
     private void DrawMachine()
     {
         MachineCanvas.Children.Clear();
-        var width = Math.Max(300, MachineCanvas.ActualWidth);
-        const double left = 65, stage1Y = 102, stage2Y = 47;
-        var right = width - 25;
-        var state = MachineStateEvaluator.Evaluate(vm.ScheduledOperations, vm.CurrentTime);
-        Text(MachineCanvas, "X → (Stage) · Y ↑ (Head) · 고정 갠트리", 6, 2, "#334155", 11);
-        Stage(MachineCanvas, left, right, stage2Y - 17, "#FEF3C7");
-        Stage(MachineCanvas, left, right, stage1Y - 17, "#CCFBF1");
+        var width = Math.Max(1, MachineCanvas.ActualWidth);
+        var height = Math.Max(1, MachineCanvas.ActualHeight);
+        var settings = vm.Machine;
+        var map = new MachineProjection(settings, width, height);
+        var state = MachineStateEvaluator.Evaluate(vm.ScheduledOperations, vm.CurrentTime, settings);
+        Text(MachineCanvas, "X → (Stage) · Y ↑ (Head) · mm · 고정 갠트리", 6, 2, "#334155", 10);
         foreach (var lane in new[] { MachineAxes.Stage1, MachineAxes.Stage2 })
         {
-            var y = lane == MachineAxes.Stage1 ? stage1Y : stage2Y;
-            var pos = lane == MachineAxes.Stage1 ? state.Stage1X : state.Stage2X;
-            Line(MachineCanvas, left, y + 10, right, y + 10, "#94A3B8", 2);
-            var stage = new Rectangle { Width = 44, Height = 22, Fill = Brush(lane == MachineAxes.Stage1 ? "#0D9488" : "#D97706") };
-            Canvas.SetLeft(stage, left + pos / 100 * Math.Max(0, right - left - 44));
-            Canvas.SetTop(stage, y - 11); MachineCanvas.Children.Add(stage);
-            Text(MachineCanvas, lane, 4, y - 10, "#0F172A", 10, 60);
+            var y = settings.ScanY(lane);
+            var position = lane == MachineAxes.Stage1 ? state.Stage1X : state.Stage2X;
+            Box(settings.StageXMin, settings.StageXMax, y - map.LaneHalfHeight, y + map.LaneHalfHeight,
+                lane == MachineAxes.Stage1 ? "#CCFBF1" : "#FEF3C7", .8);
+            Line(MachineCanvas, map.X(settings.StageXMin), map.Y(y), map.X(settings.StageXMax), map.Y(y), "#94A3B8", 1);
+            Box(position - map.MarkerWidth / 2, position + map.MarkerWidth / 2,
+                y - map.LaneHalfHeight * .7, y + map.LaneHalfHeight * .7,
+                lane == MachineAxes.Stage1 ? "#0D9488" : "#D97706", 1);
+            Text(MachineCanvas, $"{lane}\nY={y:0.###}", 2, map.Y(y) - 10, "#0F172A", 9, 62);
         }
-        // The bridge has a constant X coordinate. Only the head moves vertically on it.
-        var gantryX = (left + right) / 2;
-        var bridge = new Rectangle { Width = 22, Height = 95, Fill = Brush("#64748B"), Opacity = 0.6 };
-        Canvas.SetLeft(bridge, gantryX - 11); Canvas.SetTop(bridge, stage2Y - 20); MachineCanvas.Children.Add(bridge);
+        // All four gantry edges are configured in world mm; none depends on playback.
+        Box(settings.GantryXStart, settings.GantryXEnd, settings.GantryYStart, settings.GantryYEnd, "#64748B", .4);
         var scanning = vm.ScheduledOperations.Any(o => o.RequiresScannerHead && vm.CurrentTime >= o.StartTime && vm.CurrentTime < o.EndTime);
-        var head = new Rectangle { Width = 24, Height = 24, Fill = Brush(scanning ? "#DC2626" : "#2563EB"), Stroke = Brush("White"), StrokeThickness = 2 };
-        Canvas.SetLeft(head, gantryX - 12);
-        Canvas.SetTop(head, stage1Y + (stage2Y - stage1Y) * state.HeadY / 100 - 12);
-        MachineCanvas.Children.Add(head);
-        Text(MachineCanvas, $"S1 X={state.Stage1X:0.#} · S2 X={state.Stage2X:0.#} · Head Y={state.HeadY:0.#}", 4, 135, "#334155", 10, width - 8);
+        Box(settings.HeadX - settings.HeadWidth / 2, settings.HeadX + settings.HeadWidth / 2,
+            state.HeadY - settings.HeadHeight / 2, state.HeadY + settings.HeadHeight / 2, scanning ? "#DC2626" : "#2563EB", 1);
+        var axisY = map.Y(Math.Min(settings.GantryYStart, Math.Min(settings.Stage1Y, settings.Stage2Y) - map.LaneHalfHeight)) + 8;
+        for (var i = 0; i <= 4; i++)
+        {
+            var mm = settings.StageXMin + (settings.StageXMax - settings.StageXMin) * i / 4;
+            Line(MachineCanvas, map.X(mm), axisY - 3, map.X(mm), axisY + 2, "#64748B", 1);
+            Text(MachineCanvas, $"{mm:0.##}", map.X(mm) - 12, axisY + 2, "#475569", 9, 50);
+        }
+        Text(MachineCanvas, $"S1 X={state.Stage1X:0.###} · S2 X={state.Stage2X:0.###} · Head Y={state.HeadY:0.###} mm", 4, Math.Max(20, height - 16), "#334155", 10, Math.Max(1, width - 8));
+
+        void Box(double x1, double x2, double y1, double y2, string color, double opacity)
+        {
+            var rectangle = new Rectangle { Width = (x2 - x1) * map.Scale, Height = (y2 - y1) * map.Scale,
+                Fill = Brush(color), Stroke = Brush("#64748B"), StrokeThickness = .5, Opacity = opacity,
+                ToolTip = $"X: {x1:0.###}–{x2:0.###} mm · Y: {y1:0.###}–{y2:0.###} mm" };
+            Canvas.SetLeft(rectangle, map.X(x1)); Canvas.SetTop(rectangle, map.Y(y2)); MachineCanvas.Children.Add(rectangle);
+        }
     }
-    private static void Stage(Canvas c,double x1,double x2,double y,string color) { var r=new Rectangle { Width=Math.Max(10,x2-x1),Height=48,Fill=Brush(color),Stroke=Brush("#94A3B8"),StrokeThickness=1,RadiusX=4,RadiusY=4 }; Canvas.SetLeft(r,x1); Canvas.SetTop(r,y); c.Children.Add(r); }
     private static void Line(Canvas c,double x1,double y1,double x2,double y2,string color,double thickness) => c.Children.Add(new System.Windows.Shapes.Line { X1=x1,Y1=y1,X2=x2,Y2=y2,Stroke=Brush(color),StrokeThickness=thickness });
     private static void Text(Canvas c,string text,double x,double y,string color,double size,double max=500) { var t=new TextBlock { Text=text,Foreground=Brush(color),FontSize=size,MaxWidth=max,TextTrimming=TextTrimming.CharacterEllipsis }; Canvas.SetLeft(t,x); Canvas.SetTop(t,y); c.Children.Add(t); }
     private static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));

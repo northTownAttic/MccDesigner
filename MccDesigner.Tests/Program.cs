@@ -63,4 +63,69 @@ Check("demo reservations, cycle and head fixed during both scans", () => {
         for(var i=1;i<intervals.Count;i++) Assert(intervals[i].StartTime>=intervals[i-1].EndTime);
     }
 });
+MachineSettings LargeMachine() => new()
+{
+    StageXMin = -500, StageXMax = 2000, Stage1InitialX = 50, Stage2InitialX = -100,
+    HeadYMin = -100, HeadYMax = 600, Stage1Y = -50, Stage2Y = 450, HeadInitialY = -50,
+    GantryXStart = 200, GantryXEnd = 600, GantryYStart = -120, GantryYEnd = 620,
+    HeadX = 400, HeadWidth = 30, HeadHeight = 20
+};
+List<OperationDefinition> LargeCycle() =>
+[
+    new() { Resource = MachineAxes.Stage1, DurationSeconds = 4, IsMotion = true, RequiresScannerHead = true, StartPosition = 50, EndPosition = 1250 },
+    Move(MachineAxes.Head, duration:2, from:-50, to:450),
+    new() { Resource = MachineAxes.Stage2, DurationSeconds = 4, IsMotion = true, RequiresScannerHead = true, StartPosition = -100, EndPosition = 1500 }
+];
+Check("mm coordinates above 100 and negative initial values", () => {
+    var m = LargeMachine(); var r = scheduler.Calculate(LargeCycle(), m);
+    var initial = MachineStateEvaluator.Evaluate(r, 0, m);
+    Equal(50, initial.Stage1X); Equal(-100, initial.Stage2X); Equal(-50, initial.HeadY);
+    Equal(650, MachineStateEvaluator.Evaluate(r, 2, m).Stage1X);
+    Equal(200, MachineStateEvaluator.Evaluate(r, 5, m).HeadY);
+    Equal(700, MachineStateEvaluator.Evaluate(r, 8, m).Stage2X);
+    Equal(450, MachineStateEvaluator.Evaluate(r, 8, m).HeadY);
+});
+Check("mm travel limits are enforced", () => Reject(() => scheduler.Calculate([Move(from:50,to:2001)], LargeMachine())));
+Check("custom lane Y prevents premature scan", () => Reject(() => scheduler.Calculate([Scan(MachineAxes.Stage2)], LargeMachine())));
+Check("empty scene retains configured initial pose", () => { var s=MachineStateEvaluator.Evaluate([],0,LargeMachine()); Equal(50,s.Stage1X); Equal(-100,s.Stage2X); Equal(-50,s.HeadY); });
+Check("gantry width is 40 mm and head fixed X is 40 mm by default", () => { var m=new MachineSettings(); m.Validate(); Equal(40,m.GantryXEnd-m.GantryXStart); Equal(40,m.HeadX); });
+Check("cancel editing copy preserves original", () => { var m=new MachineSettings(); var copy=m.Copy(); copy.HeadX=50; Equal(40,m.HeadX); });
+Check("reject reversed gantry edges", () => { var m=new MachineSettings(); m.GantryXEnd=19; Reject(m.Validate); });
+Check("reject zero head size", () => { var m=new MachineSettings(); m.HeadWidth=0; Reject(m.Validate); });
+Check("reject head outside fixed gantry X", () => { var m=new MachineSettings(); m.HeadX=60; Reject(m.Validate); });
+Check("reject head Y envelope outside gantry", () => { var m=new MachineSettings(); m.HeadYMax=1000; Reject(m.Validate); });
+Check("reject coincident lane centers", () => { var m=new MachineSettings(); m.Stage2Y=0; Reject(m.Validate); });
+Check("reject nonfinite or unrenderable dimensions", () => { var m=new MachineSettings(); m.GantryYEnd=double.PositiveInfinity; Reject(m.Validate); m.GantryYEnd=1e12; Reject(m.Validate); });
+Check("version 3 saves mm machine geometry and operations", () => {
+    var json = ProjectSerializer.Serialize(LargeCycle(), LargeMachine());
+    var copy = ProjectSerializer.DeserializeProject(json);
+    Assert(!copy.ImportedLegacyUnits); Equal(2000,copy.Machine.StageXMax); Equal(450,copy.Machine.Stage2Y);
+    Equal(200,copy.Machine.GantryXStart); Equal(600,copy.Machine.GantryXEnd); Equal(30,copy.Machine.HeadWidth);
+    Equal(1250,copy.Operations[0].EndPosition); Equal(10,scheduler.Calculate(copy.Operations,copy.Machine).Max(x=>x.EndTime));
+    using var doc=System.Text.Json.JsonDocument.Parse(json);
+    Equal(3,doc.RootElement.GetProperty("FormatVersion").GetInt32()); Assert(doc.RootElement.GetProperty("Units").GetString()=="mm");
+});
+Check("version 2 import preserves user coordinates and reports units", () => {
+    var root=System.Text.Json.Nodes.JsonNode.Parse(ProjectSerializer.Serialize(DemoProject.Create()))!;
+    root["FormatVersion"]=2; root.AsObject().Remove("Machine"); root.AsObject().Remove("Units");
+    var copy=ProjectSerializer.DeserializeProject(root.ToJsonString());
+    Assert(copy.ImportedLegacyUnits); Equal(100,copy.Operations[3].EndPosition); Equal(100,copy.Machine.Stage2Y);
+});
+Check("version 3 rejects missing geometry and incompatible units", () => {
+    var root=System.Text.Json.Nodes.JsonNode.Parse(ProjectSerializer.Serialize([]))!;
+    root["Units"]="cm"; Reject(()=>ProjectSerializer.DeserializeProject(root.ToJsonString()));
+    root["Units"]="mm"; root.AsObject().Remove("Machine"); Reject(()=>ProjectSerializer.DeserializeProject(root.ToJsonString()));
+});
+Check("millimetre projection preserves equal X Y scale on resize", () => {
+    foreach(var size in new[]{(400d,220d),(1000d,500d)}) {
+        var p=new MachineProjection(new MachineSettings(),size.Item1,size.Item2);
+        Equal(p.X(60)-p.X(20),p.Y(20)-p.Y(60));
+        Assert(p.X(0)>=0 && p.X(100)<=size.Item1 && p.Y(115)>=0 && p.Y(-15)<=size.Item2);
+    }
+});
+Check("large machine projection contains configured geometry", () => {
+    var p=new MachineProjection(LargeMachine(),600,300);
+    Assert(p.X(-500)>=0 && p.X(2000)<=600 && p.Y(620)>=0 && p.Y(-120)<=300);
+    Equal((p.X(600)-p.X(200))/400,(p.Y(-50)-p.Y(450))/500);
+});
 Console.WriteLine($"{passed} checks passed.");

@@ -2,8 +2,10 @@ using MccDesigner.Models;
 namespace MccDesigner.Services;
 public sealed class Scheduler
 {
-    public IReadOnlyList<ScheduledOperation> Calculate(IReadOnlyList<OperationDefinition> operations)
+    public IReadOnlyList<ScheduledOperation> Calculate(IReadOnlyList<OperationDefinition> operations, MachineSettings? settings = null)
     {
+        settings ??= new MachineSettings();
+        settings.Validate();
         var result = new List<ScheduledOperation>();
         var reservations = new Dictionary<string, List<(double Start, double End)>>();
         var previousEnd = 0d;
@@ -14,8 +16,11 @@ public sealed class Scheduler
             if (op.Id == Guid.Empty || !ids.Add(op.Id)) throw new InvalidOperationException("작업 ID가 비어 있거나 중복됩니다.");
             if (!MachineAxes.Resources.Contains(op.Resource)) throw new InvalidOperationException("지원하지 않는 장비입니다.");
             if (!double.IsFinite(op.StartPosition) || !double.IsFinite(op.EndPosition) ||
-                op.StartPosition < 0 || op.StartPosition > 100 || op.EndPosition < 0 || op.EndPosition > 100)
-                throw new InvalidOperationException("축 위치는 0~100 범위의 유한한 수여야 합니다.");
+                (op.IsMotion && (op.StartPosition < (op.Resource == MachineAxes.Head ? settings.HeadYMin : settings.StageXMin) ||
+                op.StartPosition > (op.Resource == MachineAxes.Head ? settings.HeadYMax : settings.StageXMax) ||
+                op.EndPosition < (op.Resource == MachineAxes.Head ? settings.HeadYMin : settings.StageXMin) ||
+                op.EndPosition > (op.Resource == MachineAxes.Head ? settings.HeadYMax : settings.StageXMax))))
+                throw new InvalidOperationException("축 위치(mm)는 설비 설정의 해당 X/Y 이동 범위 안이어야 합니다.");
             if (op.Resource == MachineAxes.Head && op.RequiresScannerHead)
                 throw new InvalidOperationException("헤드 사용은 스테이지의 스캔 작업에만 선택하세요.");
             if (string.IsNullOrWhiteSpace(op.Name)) throw new InvalidOperationException("작업 이름은 비워 둘 수 없습니다.");
@@ -40,7 +45,7 @@ public sealed class Scheduler
             }
             previousEnd = end;
         }
-        AxisScheduleValidator.Validate(result);
+        AxisScheduleValidator.Validate(result, settings);
         return result;
     }
 

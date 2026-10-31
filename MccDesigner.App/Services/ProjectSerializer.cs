@@ -8,19 +8,26 @@ public static class ProjectSerializer
     {
         public int FormatVersion { get; set; }
         public string? AxisModel { get; set; }
+        public string? Units { get; set; }
+        public MachineSettings? Machine { get; set; }
         public List<OperationDefinition>? Operations { get; set; }
     }
     private const string AxisModel = "FixedGantry_StageX_HeadY";
-    public static string Serialize(IReadOnlyList<OperationDefinition> operations)
+    public static string Serialize(IReadOnlyList<OperationDefinition> operations, MachineSettings? settings = null)
     {
-        new Scheduler().Calculate(operations);
-        return JsonSerializer.Serialize(new ProjectDocument { FormatVersion = 2, AxisModel = AxisModel,
+        settings ??= new MachineSettings();
+        new Scheduler().Calculate(operations, settings);
+        return JsonSerializer.Serialize(new ProjectDocument { FormatVersion = 3, AxisModel = AxisModel, Units = "mm", Machine = settings,
             Operations = operations.ToList() }, new JsonSerializerOptions { WriteIndented = true });
     }
-    public static List<OperationDefinition> Deserialize(string json)
+    public static List<OperationDefinition> Deserialize(string json) => DeserializeProject(json).Operations;
+
+    public static LoadedProject DeserializeProject(string json)
     {
         using var document = JsonDocument.Parse(json);
         List<OperationDefinition> operations;
+        var settings = new MachineSettings();
+        var legacyUnits = true;
         if (document.RootElement.ValueKind == JsonValueKind.Array)
         {
             // Old head-X data has a different physical meaning; never reinterpret it as head-Y.
@@ -34,11 +41,20 @@ public static class ProjectSerializer
         {
             var project = JsonSerializer.Deserialize<ProjectDocument>(json)
                 ?? throw new InvalidOperationException("프로젝트 데이터가 없습니다.");
-            if (project.FormatVersion != 2 || project.AxisModel != AxisModel)
+            if (project.FormatVersion is not (2 or 3) || project.AxisModel != AxisModel)
                 throw new InvalidOperationException("지원하지 않는 프로젝트 버전 또는 축 모델입니다.");
+            if (project.FormatVersion == 3)
+            {
+                if (project.Units != "mm" || project.Machine is null)
+                    throw new InvalidOperationException("mm 단위 또는 설비 설정이 누락된 프로젝트입니다.");
+                settings = project.Machine;
+                legacyUnits = false;
+            }
             operations = project.Operations ?? throw new InvalidOperationException("작업 데이터가 없습니다.");
         }
-        new Scheduler().Calculate(operations);
-        return operations;
+        new Scheduler().Calculate(operations, settings);
+        return new LoadedProject(operations, settings, legacyUnits);
     }
 }
+
+public sealed record LoadedProject(List<OperationDefinition> Operations, MachineSettings Machine, bool ImportedLegacyUnits);

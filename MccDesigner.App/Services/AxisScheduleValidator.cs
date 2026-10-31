@@ -3,12 +3,13 @@ namespace MccDesigner.Services;
 
 public static class AxisScheduleValidator
 {
-    public static void Validate(IReadOnlyList<ScheduledOperation> operations)
+    public static void Validate(IReadOnlyList<ScheduledOperation> operations, MachineSettings? settings = null)
     {
+        settings ??= new MachineSettings();
         const double tolerance = 1e-8;
         foreach (var resource in MachineAxes.Resources)
         {
-            var position = 0d;
+            var position = settings.InitialPosition(resource);
             foreach (var op in operations.Where(o => o.Resource == resource && o.IsMotion).OrderBy(o => o.StartTime))
             {
                 if (Math.Abs(op.StartPosition - position) > tolerance)
@@ -18,9 +19,9 @@ public static class AxisScheduleValidator
         }
         foreach (var scan in operations.Where(o => o.RequiresScannerHead))
         {
-            var headY = MachineStateEvaluator.PositionAt(operations, MachineAxes.Head, scan.StartTime);
-            if (Math.Abs(headY - MachineAxes.ScanY(scan.Resource)) > tolerance)
-                throw new InvalidOperationException($"'{scan.Name}' 시작 전에 헤드를 {scan.Resource}의 Y 위치로 이동해야 합니다 (1열=0, 2열=100).");
+            var headY = MachineStateEvaluator.PositionAt(operations, MachineAxes.Head, scan.StartTime, settings);
+            if (Math.Abs(headY - settings.ScanY(scan.Resource)) > tolerance)
+                throw new InvalidOperationException($"'{scan.Name}' 시작 전에 헤드를 {scan.Resource}의 Y 위치로 이동해야 합니다 (Y={settings.ScanY(scan.Resource):0.###} mm).");
         }
     }
 }
