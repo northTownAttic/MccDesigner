@@ -29,7 +29,18 @@ public sealed class MainViewModel : ObservableObject
     public string AxisHint => $"위치 단위: mm · Stage=X / Head=Y · 1열 Y={Machine.Stage1Y:0.###} / 2열 Y={Machine.Stage2Y:0.###}";
     public RelayCommand EditMachineCommand { get; }
     public ObservableCollection<OperationDefinition> Operations { get; } = new();
-    public IReadOnlyList<ScheduledOperation> ScheduledOperations { get => _scheduled; private set { if (SetProperty(ref _scheduled, value)) { OnPropertyChanged(nameof(TotalDuration)); } } }
+    public IReadOnlyDictionary<Guid, double> OperationEndTimes { get; private set; } = new Dictionary<Guid, double>();
+    public IReadOnlyList<ScheduledOperation> ScheduledOperations
+    {
+        get => _scheduled;
+        private set
+        {
+            if (!SetProperty(ref _scheduled, value)) return;
+            OperationEndTimes = value.ToDictionary(operation => operation.Id, operation => operation.EndTime);
+            OnPropertyChanged(nameof(OperationEndTimes));
+            OnPropertyChanged(nameof(TotalDuration));
+        }
+    }
     public OperationDefinition? SelectedOperation { get => _selectedOperation; set { SetProperty(ref _selectedOperation, value); RefreshSelectionCommands(); } }
     public string Status { get => _status; set => SetProperty(ref _status, value); }
     public double CurrentTime { get => _currentTime; set { if (SetProperty(ref _currentTime, value)) OnPropertyChanged(nameof(CurrentTimeLabel)); } }
