@@ -48,25 +48,25 @@ public sealed class MainViewModel : ObservableObject
     private void AddOperation()
     {
         var op = new OperationDefinition { Name = $"Operation {Operations.Count + 1}", Resource = "Stage 1", DurationSeconds = 1.0 };
-        Operations.Add(op); SelectedOperation = op; Status = "작업을 추가했습니다.";
+        Operations.Add(op); SelectedOperation = op; Calculate();
     }
     private void RemoveOperation()
     {
         if (SelectedOperation is null) return;
-        Operations.Remove(SelectedOperation); SelectedOperation = null; Status = "선택한 작업을 삭제했습니다.";
+        Operations.Remove(SelectedOperation); SelectedOperation = null; Calculate();
     }
     public void RefreshCalculationAfterEdit() { OnPropertyChanged(nameof(OperationCount)); Calculate(); }
     private void Calculate()
     {
         try { ScheduledOperations = _scheduler.Calculate(Operations.ToList()); CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 총 {TotalDuration:0.###}초"; }
-        catch (Exception ex) { Status = $"계산 오류: {ex.Message}"; MessageBox.Show(ex.Message, "MCC 계산 오류", MessageBoxButton.OK, MessageBoxImage.Warning); }
+        catch (Exception ex) { ScheduledOperations = Array.Empty<ScheduledOperation>(); CurrentTime = 0; Status = $"계산 오류: {ex.Message}"; }
     }
     private void SaveProject()
     {
         var dlg = new SaveFileDialog { Filter = "MCC 프로젝트 (*.json)|*.json", FileName = "MccProject.json" };
         if (dlg.ShowDialog() != true) return;
-        try { File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(Operations.ToList(), new JsonSerializerOptions { WriteIndented = true })); Status = $"저장 완료: {dlg.FileName}"; }
-        catch (Exception ex) { MessageBox.Show($"저장 실패: {ex.Message}"); }
+        try { _scheduler.Calculate(Operations.ToList()); File.WriteAllText(dlg.FileName, JsonSerializer.Serialize(Operations.ToList(), new JsonSerializerOptions { WriteIndented = true })); Status = $"저장 완료: {dlg.FileName}"; }
+        catch (Exception ex) { Status = $"저장 실패: {ex.Message}"; MessageBox.Show(Status); }
     }
     private void LoadProject()
     {
@@ -74,8 +74,9 @@ public sealed class MainViewModel : ObservableObject
         if (dlg.ShowDialog() != true) return;
         try {
             var loaded = JsonSerializer.Deserialize<List<OperationDefinition>>(File.ReadAllText(dlg.FileName)) ?? throw new InvalidOperationException("작업 데이터가 없습니다.");
+            var calculated = _scheduler.Calculate(loaded);
             Operations.Clear(); foreach (var op in loaded) Operations.Add(op);
-            SelectedOperation = null; Calculate(); Status = $"불러오기 완료: {dlg.FileName}";
-        } catch (Exception ex) { MessageBox.Show($"불러오기 실패: {ex.Message}"); }
+            SelectedOperation = null; ScheduledOperations = calculated; CurrentTime = 0; Status = $"불러오기 완료: {dlg.FileName}";
+        } catch (Exception ex) { Status = $"불러오기 실패: {ex.Message}"; MessageBox.Show(Status); }
     }
 }

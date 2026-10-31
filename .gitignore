@@ -1,3 +1,4 @@
-
-MccDesigner.App\bin
-.vs
+**/bin/
+**/obj/
+.vs/
+*.user
