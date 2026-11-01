@@ -16,19 +16,26 @@ public sealed class MainViewModel : ObservableObject
     private double _simulatorZoom = 200;
     public double SimulatorZoom { get => _simulatorZoom; set => SetProperty(ref _simulatorZoom, double.IsFinite(value) ? Math.Clamp(value, 100, 400) : 200); }
     private bool _supplyEnabled = true;
-    private double _supplyInterval = 30;
+    private double _supplyInterval1 = 30;
+    private double _supplyInterval2 = 30;
     private int _supplyBatchSize = 1;
     private bool _supplyAtStart;
-    public bool SupplyEnabled { get => _supplyEnabled; set { if (SetProperty(ref _supplyEnabled, value)) RefreshPredecessorChoices(); } }
-    public double SupplyInterval { get => _supplyInterval; set => SetProperty(ref _supplyInterval, value); }
+    public bool SupplyEnabled { get => _supplyEnabled; set { if (SetProperty(ref _supplyEnabled, value)) { RefreshPredecessorChoices(); OnPropertyChanged(nameof(TimelineHint)); } } }
+    public double SupplyInterval1 { get => _supplyInterval1; set => SetProperty(ref _supplyInterval1, value); }
+    public double SupplyInterval2 { get => _supplyInterval2; set => SetProperty(ref _supplyInterval2, value); }
     public int SupplyBatchSize { get => _supplyBatchSize; set => SetProperty(ref _supplyBatchSize, value); }
     public bool SupplyAtStart { get => _supplyAtStart; set => SetProperty(ref _supplyAtStart, value); }
-    public MediaSupplySettings SupplySettings => new() { Enabled = SupplyEnabled, IntervalSeconds = SupplyInterval, BatchSize = SupplyBatchSize, SupplyAtStart = SupplyAtStart };
+    public MediaSupplySettings SupplySettings => new() { Enabled = SupplyEnabled, IntervalSeconds = SupplyInterval1, Stage1IntervalSeconds = SupplyInterval1, Stage2IntervalSeconds = SupplyInterval2, BatchSize = SupplyBatchSize, SupplyAtStart = SupplyAtStart };
     public bool ProductionView { get; private set; }
     public double TimelineStart { get; private set; }
-    public double DisplayDuration => ProductionView ? 150 : TotalDuration;
-    private IReadOnlyList<ScheduledOperation> liveOperations = Array.Empty<ScheduledOperation>();
-    public IReadOnlyList<ScheduledOperation> DisplayOperations => ProductionView ? liveOperations : ScheduledOperations;
+    private IReadOnlyList<ScheduledOperation> plannedOperations = Array.Empty<ScheduledOperation>();
+    private bool completeProductionPlan;
+    public string TimelineHint => !SupplyEnabled ? "클릭·드래그: 시간 탐색 (일시정지) · 연한 막대: 스캔 중 헤드 점유" : completeProductionPlan ? "전체 예정 작업 표시 · 빨간 선: 현재 시간 · 연한 막대: 스캔 중 헤드 점유" : "무한·대량 반복: 일정 구간의 예정 작업을 미리 표시 · 빨간 선: 현재 시간";
+    private long forecastThroughRound;
+    private long lastForecastHighest;
+    public double DisplayDuration => SupplyEnabled && plannedOperations.Count > 0
+        ? Math.Max(1, plannedOperations.Max(x => x.EndTime) - TimelineStart) : TotalDuration;
+    public IReadOnlyList<ScheduledOperation> DisplayOperations => SupplyEnabled && plannedOperations.Count > 0 ? plannedOperations : ScheduledOperations;
     public MachineState? LivePose { get; private set; }
     private string _supplyStatus = "전처리 공급 대기 · 첫 공급 30초";
     private bool _hasWaitingMedia;
@@ -40,23 +47,34 @@ public sealed class MainViewModel : ObservableObject
     {
         ProductionView = session != null;
         var changed = !ReferenceEquals(session, displayedSession) || session?.Version != displayedVersion;
-        if (changed) liveOperations = session?.VisibleOperations ?? Array.Empty<ScheduledOperation>();
+        if (session != null && !completeProductionPlan &&
+            (!ReferenceEquals(session, displayedSession) || (session.HighestRound >= forecastThroughRound - 1 && session.HighestRound != lastForecastHighest)))
+        {
+            var future = session.Forecast(); plannedOperations = future.Operations;
+            forecastThroughRound = future.ThroughRound; lastForecastHighest = session.HighestRound;
+            TimelineStart = Math.Max(0, session.ElapsedSeconds - 120);
+        }
         displayedSession = session; displayedVersion = session?.Version ?? -1;
         LivePose = session?.MachineState;
-        TimelineStart = session is null ? 0 : Math.Max(0, session.ElapsedSeconds - 120);
+        if (session is null || completeProductionPlan) TimelineStart = 0;
         if (session != null)
         {
             HasWaitingMedia = session.WaitingMedia > 0;
-            SupplyStatus = $"전처리부 · 공급 {session.SuppliedMedia}매 / 전달 {session.ConsumedMedia}매 · " +
-                (HasWaitingMedia ? $"미디어 대기 중 {session.WaitingMedia}매" : "미디어 공급 대기 (0매)") +
+            SupplyStatus = $"1열 전처리 · 공급 {session.SuppliedFor(MachineAxes.Stage1)} / 전달 {session.ConsumedFor(MachineAxes.Stage1)} / 대기 {session.WaitingFor(MachineAxes.Stage1)}매\n" +
+                $"2열 전처리 · 공급 {session.SuppliedFor(MachineAxes.Stage2)} / 전달 {session.ConsumedFor(MachineAxes.Stage2)} / 대기 {session.WaitingFor(MachineAxes.Stage2)}매" +
                 (session.LoadingStages.Length > 0 ? $" · {session.LoadingStages} 로딩 중" : "");
-            if (changed) { OperationEndTimes = session.LatestEndTimes.ToDictionary(x => x.Key, x => x.Value); OnPropertyChanged(nameof(OperationEndTimes)); }
+            if (changed)
+            {
+                var times = ScheduledOperations.ToDictionary(x => x.Id, x => x.EndTime);
+                foreach (var (id, end) in session.LatestEndTimes) times[id] = end;
+                OperationEndTimes = times; OnPropertyChanged(nameof(OperationEndTimes));
+            }
             CurrentTime = session.ElapsedSeconds;
         }
         else
         {
             HasWaitingMedia = false;
-            SupplyStatus = SupplyEnabled ? $"전처리 공급 대기 · {SupplyInterval:0.###}초마다 {SupplyBatchSize}매" + (SupplyAtStart ? " · 시작 즉시 첫 공급" : "") : "전처리 연동 해제";
+            SupplyStatus = SupplyEnabled ? $"열별 독립 공급 · 1열 {SupplyInterval1:0.###}초 / 2열 {SupplyInterval2:0.###}초 · 열당 {SupplyBatchSize}매" + (SupplyAtStart ? " · 시작 즉시 첫 공급" : "") : "전처리 연동 해제";
             OperationEndTimes = ScheduledOperations.ToDictionary(x => x.Id, x => x.EndTime);
             OnPropertyChanged(nameof(OperationEndTimes));
         }
@@ -190,17 +208,24 @@ public sealed class MainViewModel : ObservableObject
         }
     }
     public void RefreshCalculationAfterEdit() { OnPropertyChanged(nameof(OperationCount)); Calculate(); }
+    private void ApplyProductionPlan(ProductionPlan plan)
+    {
+        plannedOperations = plan.Operations; completeProductionPlan = plan.Complete;
+        forecastThroughRound = plan.ThroughRound; lastForecastHighest = 0; TimelineStart = 0;
+        OnPropertyChanged(nameof(TimelineHint));
+        ScheduledOperations = plan.FirstCycle;
+    }
     private void Calculate()
     {
         RefreshPredecessorChoices();
-        try { SupplySettings.Validate();
-            if (SupplyEnabled)
-            {
-                var preview = new MediaProductionSession(Operations.ToList(), Machine, SupplySettings, new PlaybackOptions(), true);
-                preview.RunToCompletion(); ScheduledOperations = preview.VisibleOperations;
-            }
-            else ScheduledOperations = _scheduler.Calculate(Operations.ToList(), Machine); CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 총 {TotalDuration:0.###}초 (순차 합계 {Operations.Sum(x => x.DurationSeconds):0.###}초)"; }
-        catch (Exception ex) { ScheduledOperations = Array.Empty<ScheduledOperation>(); CurrentTime = 0; Status = $"계산 오류: {ex.Message}"; }
+        try
+        {
+            SupplySettings.Validate();
+            if (SupplyEnabled) ApplyProductionPlan(ProductionPlan.Create(Operations.ToList(), Machine, SupplySettings, PlaybackOptions));
+            else { plannedOperations = Array.Empty<ScheduledOperation>(); ScheduledOperations = _scheduler.Calculate(Operations.ToList(), Machine); }
+            CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 첫 사이클 {TotalDuration:0.###}초 · 예정 작업 미리 표시";
+        }
+        catch (Exception ex) { plannedOperations = Array.Empty<ScheduledOperation>(); ScheduledOperations = Array.Empty<ScheduledOperation>(); CurrentTime = 0; Status = $"계산 오류: {ex.Message}"; }
     }
     private void SaveProject()
     {
@@ -215,15 +240,17 @@ public sealed class MainViewModel : ObservableObject
         if (dlg.ShowDialog() != true) return;
         try {
             var loaded = ProjectSerializer.DeserializeProject(File.ReadAllText(dlg.FileName));
-            IReadOnlyList<ScheduledOperation> calculated;
-            if (loaded.Supply.Enabled) { var preview = new MediaProductionSession(loaded.Operations, loaded.Machine, loaded.Supply, new PlaybackOptions(), true); preview.RunToCompletion(); calculated = preview.VisibleOperations; }
-            else calculated = _scheduler.Calculate(loaded.Operations, loaded.Machine);
-            SupplyEnabled = loaded.Supply.Enabled; SupplyInterval = loaded.Supply.IntervalSeconds; SupplyBatchSize = loaded.Supply.BatchSize; SupplyAtStart = loaded.Supply.SupplyAtStart;
+            var plan = loaded.Supply.Enabled ? ProductionPlan.Create(loaded.Operations, loaded.Machine, loaded.Supply, loaded.Playback) : null;
+            var calculated = plan?.FirstCycle ?? _scheduler.Calculate(loaded.Operations, loaded.Machine);
+            SupplyEnabled = loaded.Supply.Enabled; SupplyInterval1 = loaded.Supply.Stage1IntervalSeconds; SupplyInterval2 = loaded.Supply.Stage2IntervalSeconds; SupplyBatchSize = loaded.Supply.BatchSize; SupplyAtStart = loaded.Supply.SupplyAtStart;
             RepeatCount = loaded.Playback.RepeatCount; InfiniteRepeat = loaded.Playback.Infinite;
             Machine = loaded.Machine; OnPropertyChanged(nameof(Machine)); OnPropertyChanged(nameof(AxisHint));
             RefreshPredecessorChoices(loaded.Operations);
             Operations.Clear(); foreach (var op in loaded.Operations) Operations.Add(op);
-            SelectedOperation = null; ScheduledOperations = calculated; CurrentTime = 0; Status = $"불러오기 완료: {dlg.FileName}" + (loaded.ImportedLegacyUnits ? " · 이전 좌표값을 변경 없이 1단위=1 mm로 읽었습니다. 설비 설정을 확인하세요." : "");
+            SelectedOperation = null;
+            if (plan != null) ApplyProductionPlan(plan);
+            else { plannedOperations = Array.Empty<ScheduledOperation>(); ScheduledOperations = calculated; }
+            CurrentTime = 0; Status = $"불러오기 완료: {dlg.FileName}" + (loaded.ImportedLegacyUnits ? " · 이전 좌표값을 변경 없이 1단위=1 mm로 읽었습니다. 설비 설정을 확인하세요." : "");
         } catch (Exception ex) { Status = $"불러오기 실패: {ex.Message}"; MessageBox.Show(Status); }
     }
 }

@@ -395,12 +395,12 @@ Check("explicit reference notifications update checkbox state and are not saved 
     Assert(changed.Contains(nameof(OperationDefinition.HasExplicitPredecessor)));
     var json=System.Text.Json.JsonSerializer.Serialize(op); Assert(!json.Contains("HasExplicitPredecessor"));
 });
-Check("preprocessor first sheet after interval starts stage1 loading immediately", () => {
+Check("independent preprocessors supply both stages at the first interval", () => {
     var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=30},new());
     session.Advance(29); Equal(0,session.ConsumedMedia); session.Advance(30);
-    Equal(1,session.SuppliedMedia); Equal(1,session.ConsumedMedia); Equal(0,session.WaitingMedia);
+    Equal(2,session.SuppliedMedia); Equal(2,session.ConsumedMedia); Equal(0,session.WaitingMedia);
     var load=session.VisibleOperations.Single(x=>x.Resource==MachineAxes.Stage1); Equal(30,load.StartTime);
-    session.Advance(60); var load2=session.VisibleOperations.Single(x=>x.Name.StartsWith("Stage 2 Loading")); Equal(60,load2.StartTime);
+    session.Advance(60); var load2=session.VisibleOperations.Single(x=>x.Name.StartsWith("Stage 2 Loading")); Equal(30,load2.StartTime);
 });
 Check("batch supply can load both stages at same time", () => {
     var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=30,BatchSize=2},new());
@@ -409,8 +409,8 @@ Check("batch supply can load both stages at same time", () => {
 });
 Check("supply at start and media waiting count are explicit", () => {
     var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=1,BatchSize=5,SupplyAtStart=true},new());
-    Equal(5,session.SuppliedMedia); Equal(2,session.ConsumedMedia); Equal(3,session.WaitingMedia);
-    session.Advance(1); Equal(8,session.WaitingMedia);
+    Equal(10,session.SuppliedMedia); Equal(2,session.ConsumedMedia); Equal(8,session.WaitingMedia);
+    session.Advance(1); Equal(18,session.WaitingMedia);
 });
 Check("next stage1 cycle loads before other stage completes previous cycle", () => {
     var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=10},new(){RepeatCount=2},false);
@@ -420,14 +420,14 @@ Check("next stage1 cycle loads before other stage completes previous cycle", () 
 });
 Check("supply-aware single cycle is fully planned with loading wait", () => {
     var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=30},new(),true);
-    session.RunToCompletion(); Assert(session.State==PlaybackState.Completed); Equal(82.25,session.ElapsedSeconds);
+    session.RunToCompletion(); Assert(session.State==PlaybackState.Completed); Equal(69,session.ElapsedSeconds);
     Equal(1,session.CompletedStage1); Equal(1,session.CompletedStage2); Equal(9,session.VisibleOperations.Count);
     var pose=session.MachineState; Equal(0,pose.Stage1X); Equal(0,pose.Stage2X); Equal(0,pose.HeadY);
 });
 Check("production pause resume and stop freeze event processing", () => {
     var session=new MediaProductionSession(DemoProject.Create(),new(),new(),new());
     session.Advance(20); session.Pause(); session.Advance(50); Equal(20,session.ElapsedSeconds);
-    session.Resume(); session.Advance(30); Equal(1,session.ConsumedMedia);
+    session.Resume(); session.Advance(30); Equal(2,session.ConsumedMedia);
     session.Stop(); session.Advance(60); Equal(30,session.ElapsedSeconds);
 });
 Check("production keeps bounded history during many cycles", () => {
@@ -455,8 +455,8 @@ Check("supply settings and loading flags survive project save", () => {
 });
 Check("fractional supply intervals do not duplicate or lose boundary arrivals", () => {
     var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=.7},new());
-    session.Advance(2.1); Equal(3,session.SuppliedMedia); Equal(2,session.ConsumedMedia); Equal(1,session.WaitingMedia);
-    session.Advance(7); Equal(10,session.SuppliedMedia);
+    session.Advance(2.1); Equal(6,session.SuppliedMedia); Equal(2,session.ConsumedMedia); Equal(4,session.WaitingMedia);
+    session.Advance(7); Equal(20,session.SuppliedMedia);
 });
 Check("single preview skips idle supply events during very long processing", () => {
     var ops=DemoProject.Create(); ops[3].DurationSeconds=1_000_000;
@@ -472,7 +472,7 @@ Check("production template retains same-resource exclusivity across cycles", () 
         for(var i=1;i<jobs.Count;i++) Assert(jobs[i].StartTime>=jobs[i-1].EndTime);
     }
 });
-Check("screenshot cross-stage previous wait reproduces delay and explicit dependencies remove it", () => {
+Check("independent lane feed removes shared supply delay and explicit reference removes stage2 home wait", () => {
     var m=new MachineSettings(){StageXMax=2000,HeadYMax=1000,Stage2Y=1000,GantryYEnd=1015};
     var ops=new List<OperationDefinition>
     {
@@ -488,15 +488,68 @@ Check("screenshot cross-stage previous wait reproduces delay and explicit depend
     foreach(var i in new[]{4,6,10,12}) ops[i].RequiresScannerHead=true;
     ops[8].PredecessorId=ops[6].Id; ops[14].PredecessorId=ops[12].Id;
     var original=new MediaProductionSession(ops,m,new(),new(),true); original.RunToCompletion();
-    Equal(63,original.VisibleOperations.Single(x=>x.Id==ops[4].Id).StartTime);
-    Equal(74.3,original.VisibleOperations.Single(x=>x.Id==ops[10].Id).StartTime);
-    Equal(85.6,original.ElapsedSeconds);
+    Equal(33,original.VisibleOperations.Single(x=>x.Id==ops[4].Id).StartTime);
+    Equal(44.3,original.VisibleOperations.Single(x=>x.Id==ops[10].Id).StartTime);
+    Equal(55.6,original.ElapsedSeconds);
     ops[4].PredecessorId=ops[1].Id; ops[10].PredecessorId=ops[7].Id;
     var fixedPlan=new MediaProductionSession(ops,m,new(),new(),true); fixedPlan.RunToCompletion();
     Equal(33,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[4].Id).StartTime);
-    Equal(63,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[10].Id).StartTime);
+    Equal(43,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[10].Id).StartTime);
     Equal(41.3,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[7].Id).StartTime);
     Equal(41.3,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[8].Id).StartTime);
-    Equal(74.3,fixedPlan.ElapsedSeconds);
+    Equal(54.3,fixedPlan.ElapsedSeconds);
+});
+Check("lane preprocessors run in parallel with distinct periods and separate stock", () => {
+    var supply=new MediaSupplySettings(){Stage1IntervalSeconds=10,Stage2IntervalSeconds=100};
+    var session=new MediaProductionSession(DemoProject.Create(),new(),supply,new(){RepeatCount=2});
+    session.Advance(30); Equal(3,session.SuppliedFor(MachineAxes.Stage1)); Equal(0,session.SuppliedFor(MachineAxes.Stage2));
+    Equal(1,session.ConsumedFor(MachineAxes.Stage1)); Equal(0,session.ConsumedFor(MachineAxes.Stage2));
+    Equal(2,session.WaitingFor(MachineAxes.Stage1));
+    session.Advance(100); Equal(1,session.ConsumedFor(MachineAxes.Stage2));
+    Equal(100,session.VisibleOperations.Single(x=>x.Name=="Stage 2 Loading [1회]").StartTime);
+});
+Check("ready stage consumes already supplied lane media without restarting thirty second timer", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=30},new(){RepeatCount=2});
+    session.Advance(70);
+    Equal(60,session.VisibleOperations.Single(x=>x.Name=="Stage 1 Loading [2회]").StartTime);
+    Equal(69,session.VisibleOperations.Single(x=>x.Name=="Stage 2 Loading [2회]").StartTime);
+});
+Check("complete finite production chart contains future cycles before playback", () => {
+    var ops=DemoProject.Create(); var plan=ProductionPlan.Create(ops,new(),new(),new(){RepeatCount=3});
+    Assert(plan.Complete); Equal(27,plan.Operations.Count); Equal(9,plan.FirstCycle.Count);
+    Assert(plan.Operations.Any(x=>x.Name.EndsWith("[3회]")));
+    var session=new MediaProductionSession(ops,new(),new(),new(){RepeatCount=3});
+    Equal(0,session.VisibleOperations.Count); Equal(0,session.ElapsedSeconds);
+    Assert(plan.Operations.Any(x=>x.StartTime>0));
+    session.Advance(10); Equal(27,plan.Operations.Count);
+});
+Check("forecast includes pending operations and never consumes real media or moves live axes", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(),new(){Infinite=true});
+    var before=session.MachineState; var future=session.Forecast();
+    Equal(27,future.Operations.Count); Equal(0,session.ElapsedSeconds); Equal(0,session.ConsumedMedia); Assert(session.MachineState==before);
+    session.Advance(40); var consumed=session.ConsumedMedia; var pose=session.MachineState; var version=session.Version;
+    var forecast=session.Forecast(); Assert(forecast.Operations.Any(x=>x.StartTime>40));
+    Equal(40,session.ElapsedSeconds); Equal(consumed,session.ConsumedMedia); Equal(version,session.Version); Assert(session.MachineState==pose);
+});
+Check("forecast times agree with later real execution", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(),new(){RepeatCount=3});
+    session.Advance(40); var future=session.Forecast(); session.RunToCompletion();
+    foreach(var planned in future.Operations) {
+        var actual=session.VisibleOperations.Single(x=>x.Id==planned.Id && x.Name==planned.Name);
+        Equal(planned.StartTime,actual.StartTime); Equal(planned.EndTime,actual.EndTime);
+    }
+});
+Check("infinite forecast stays bounded after hundreds of completed cycles", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=1},new(){Infinite=true});
+    session.Advance(20000); var future=session.Forecast();
+    Assert(future.Operations.Count<550); Assert(session.RetainedJobCount<=527);
+    Assert(future.Operations.Any(x=>x.EndTime>session.ElapsedSeconds));
+});
+Check("per-lane intervals survive save and older shared interval becomes each lane interval", () => {
+    var json=ProjectSerializer.Serialize(DemoProject.Create(),new(),new(),new(){Enabled=true,Stage1IntervalSeconds=20,Stage2IntervalSeconds=35});
+    var copy=ProjectSerializer.DeserializeProject(json); Equal(20,copy.Supply.Stage1IntervalSeconds); Equal(35,copy.Supply.Stage2IntervalSeconds);
+    var root=System.Text.Json.Nodes.JsonNode.Parse(json)!; root["Supply"]!.AsObject().Remove("Stage1IntervalSeconds"); root["Supply"]!.AsObject().Remove("Stage2IntervalSeconds");
+    root["Supply"]!["IntervalSeconds"]=30;
+    var legacy=ProjectSerializer.DeserializeProject(root.ToJsonString()); Equal(30,legacy.Supply.Stage1IntervalSeconds); Equal(30,legacy.Supply.Stage2IntervalSeconds);
 });
 Console.WriteLine($"{passed} checks passed.");

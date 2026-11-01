@@ -17,6 +17,9 @@ public partial class MainWindow : Window
     private readonly Stopwatch playbackClock = new();
     private readonly PlaybackSession playback = new();
     private MediaProductionSession? production;
+    private IReadOnlyList<ScheduledOperation>? renderedTimelineItems;
+    private double renderedTimelineWidth, renderedTimelineOrigin, renderedTimelineDuration;
+    private Line? timelineCursor;
     private bool draggingTimeline;
     private double playbackElapsedBase;
     private double? previewSeekTime;
@@ -41,7 +44,7 @@ public partial class MainWindow : Window
         vm.PropertyChanged += (_, e) => {
             if (e.PropertyName == nameof(MainViewModel.SimulatorZoom)) ZoomMachineCanvas();
             if (e.PropertyName == nameof(MainViewModel.ScheduledOperations)) operationEditPending = false;
-            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine) or nameof(MainViewModel.RepeatCount) or nameof(MainViewModel.InfiniteRepeat) or nameof(MainViewModel.SupplyEnabled) or nameof(MainViewModel.SupplyInterval) or nameof(MainViewModel.SupplyBatchSize) or nameof(MainViewModel.SupplyAtStart)) ResetPlayback();
+            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine) or nameof(MainViewModel.RepeatCount) or nameof(MainViewModel.InfiniteRepeat) or nameof(MainViewModel.SupplyEnabled) or nameof(MainViewModel.SupplyInterval1) or nameof(MainViewModel.SupplyInterval2) or nameof(MainViewModel.SupplyBatchSize) or nameof(MainViewModel.SupplyAtStart)) ResetPlayback();
             if (e.PropertyName == nameof(MainViewModel.ProductionFrame) ||
                 e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine) ||
                 (e.PropertyName == nameof(MainViewModel.CurrentTime) && !vm.ProductionView)) DrawAll();
@@ -114,10 +117,11 @@ public partial class MainWindow : Window
         committingEdit = true;
         try
         {
-            SupplyIntervalInput.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            SupplyInterval1Input.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            SupplyInterval2Input.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
             SupplyBatchInput.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
             RepeatCountInput.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-            if (Validation.GetHasError(SupplyIntervalInput) || Validation.GetHasError(SupplyBatchInput) || Validation.GetHasError(RepeatCountInput) ||
+            if (Validation.GetHasError(SupplyInterval1Input) || Validation.GetHasError(SupplyInterval2Input) || Validation.GetHasError(SupplyBatchInput) || Validation.GetHasError(RepeatCountInput) ||
                 !OperationsGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
                 !OperationsGrid.CommitEdit(DataGridEditingUnit.Row, true))
             {
@@ -260,11 +264,17 @@ public partial class MainWindow : Window
     private void DrawAll() { DrawTimeline(); DrawMachine(); }
     private void DrawTimeline()
     {
-        TimelineCanvas.Children.Clear();
         var items = vm.DisplayOperations;
         var origin = vm.TimelineStart;
         var layout = new TimelineLayout(TimelineScrollViewer.ViewportWidth, vm.DisplayDuration);
         var total = layout.DisplayDuration;
+        var cursorX = layout.XAt(vm.CurrentTime - origin);
+        if (ReferenceEquals(items, renderedTimelineItems) && layout.Width == renderedTimelineWidth &&
+            origin == renderedTimelineOrigin && total == renderedTimelineDuration && timelineCursor != null)
+        { timelineCursor.X1 = timelineCursor.X2 = cursorX; return; }
+        TimelineCanvas.Children.Clear();
+        renderedTimelineItems = items; renderedTimelineWidth = layout.Width;
+        renderedTimelineOrigin = origin; renderedTimelineDuration = total;
         const double left=TimelineLayout.Left, top=25, rowH=38;
         TimelineCanvas.Width = layout.Width;
         var scale = layout.PixelsPerSecond;
@@ -284,7 +294,8 @@ public partial class MainWindow : Window
                 if(w>45) Text(TimelineCanvas,primary?op.Name:$"{op.Name} (점유)",x+4,y+5,primary?"White":"#0F172A",10,w-8);
             }
         }
-        var cx=left+(vm.CurrentTime-origin)*scale; Line(TimelineCanvas,cx,12,cx,150,"#DC2626",2);
+        timelineCursor = new Line { X1 = cursorX, X2 = cursorX, Y1 = 12, Y2 = 150, Stroke = Brush("#DC2626"), StrokeThickness = 2 };
+        TimelineCanvas.Children.Add(timelineCursor);
     }
     private void FitMachine_Click(object sender, RoutedEventArgs e)
     {

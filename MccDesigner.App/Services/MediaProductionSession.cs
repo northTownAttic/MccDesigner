@@ -29,20 +29,25 @@ public sealed class MediaProductionSession
     private readonly Dictionary<string, double> position = new();
     private readonly Queue<ScheduledOperation> history = new();
     private readonly bool retainFullPreview;
+    private long? roundLimit;
+    public long HighestRound => highestRound;
     private long highestRound;
     private readonly Dictionary<Guid, double> latestEnds = new();
     public IReadOnlyDictionary<Guid, double> LatestEndTimes => latestEnds;
     public string LoadingStages => string.Join(", ", running.Where(x => x.Definition.IsLoading).Select(x => x.Definition.Resource));
-    private long consumed;
+    private readonly Dictionary<string, long> consumed = new() { [MachineAxes.Stage1] = 0, [MachineAxes.Stage2] = 0 };
     private long completed1, completed2;
     public PlaybackState State { get; private set; } = PlaybackState.Ready;
     public double ElapsedSeconds { get; private set; }
     public long CompletedStage1 => completed1;
     public long CompletedStage2 => completed2;
     public long CompletedCycles => Math.Min(completed1, completed2);
-    public long ConsumedMedia => consumed;
-    public long SuppliedMedia => Produced(ElapsedSeconds);
-    public long WaitingMedia => SuppliedMedia - consumed;
+    public long ConsumedMedia => consumed.Values.Sum();
+    public long SuppliedMedia => SuppliedFor(MachineAxes.Stage1) + SuppliedFor(MachineAxes.Stage2);
+    public long SuppliedFor(string stage) => Produced(stage, ElapsedSeconds);
+    public long ConsumedFor(string stage) => consumed[stage];
+    public long WaitingFor(string stage) => SuppliedFor(stage) - consumed[stage];
+    public long WaitingMedia => WaitingFor(MachineAxes.Stage1) + WaitingFor(MachineAxes.Stage2);
     public int Version { get; private set; }
     public int RetainedJobCount => rounds.Sum(x => x.Length) + history.Count;
     public IReadOnlyList<ScheduledOperation> VisibleOperations => history.Concat(running.Select(Snapshot)).OrderBy(x => x.StartTime).ToArray();
@@ -52,7 +57,8 @@ public sealed class MediaProductionSession
         MediaSupplySettings supply, PlaybackOptions options, bool retainFullPreview = false)
     {
         machine.Validate(); supply.Validate(); options.Validate();
-        if (retainFullPreview && (options.Infinite || options.RepeatCount != 1)) throw new InvalidOperationException("전체 미리보기 보관은 1회 계산만 가능합니다.");
+        if (retainFullPreview && (options.Infinite || (long)options.RepeatCount * operations.Count > Math.Max(5000, operations.Count))) throw new InvalidOperationException("전체 미리보기 보관 한도를 초과했습니다. 범위 예측을 사용하세요.");
+        roundLimit = options.Infinite ? null : options.RepeatCount;
         this.retainFullPreview = retainFullPreview;
         this.machine = machine.Copy(); this.supply = supply.Copy(); this.options = options.Copy();
         var validated = new Scheduler().Calculate(operations, this.machine);
@@ -87,6 +93,43 @@ public sealed class MediaProductionSession
         foreach (var resource in MachineAxes.Resources) position[resource] = this.machine.InitialPosition(resource);
         AddRound(1); State = PlaybackState.Running; Dispatch();
     }
+    private MediaProductionSession(MediaProductionSession source, long forecastLimit)
+    {
+        template = source.template; machine = source.machine; supply = source.supply; options = source.options;
+        predecessors = source.predecessors; stageOrder = source.stageOrder; headOrder = source.headOrder;
+        retainFullPreview = true; roundLimit = forecastLimit;
+        highestRound = source.highestRound; completed1 = source.completed1; completed2 = source.completed2;
+        ElapsedSeconds = source.ElapsedSeconds; State = PlaybackState.Running; Version = source.Version;
+        foreach (var (key, value) in source.consumed) consumed[key] = value;
+        foreach (var (key, value) in source.position) position[key] = value;
+        foreach (var (key, value) in source.latestEnds) latestEnds[key] = value;
+        busy.UnionWith(source.busy);
+        foreach (var item in source.history) history.Enqueue(item);
+        var copies = new Dictionary<Job, Job>();
+        var queue = new Queue<Job>();
+        Job Copy(Job original)
+        {
+            if (copies.TryGetValue(original, out var existing)) return existing;
+            var copy = new Job(original.Definition, original.Index, original.Round) { State = original.State, Start = original.Start, End = original.End };
+            copies.Add(original, copy); queue.Enqueue(original); return copy;
+        }
+        foreach (var round in source.rounds) rounds.Add(round.Select(Copy).ToArray());
+        running.AddRange(source.running.Select(Copy));
+        foreach (var (stage, tail) in source.stageTail) stageTail[stage] = Copy(tail);
+        headTail = source.headTail is null ? null : Copy(source.headTail);
+        while (queue.TryDequeue(out var original))
+            foreach (var parent in original.Parents) copies[original].Parents.Add(Copy(parent));
+    }
+    /// <summary>Plan a bounded future from a copy; production clocks, queues and counters stay untouched.</summary>
+    public ProductionForecast Forecast(int roundsAhead = 2)
+    {
+        if (roundsAhead < 1 || roundsAhead > 3) throw new ArgumentOutOfRangeException(nameof(roundsAhead));
+        var limit = highestRound + roundsAhead;
+        if (roundLimit is long final) limit = Math.Min(limit, final);
+        var copy = new MediaProductionSession(this, limit);
+        copy.RunToCompletion();
+        return new(limit, copy.VisibleOperations);
+    }
     public void Advance(double time)
     {
         if (State != PlaybackState.Running) return;
@@ -96,8 +139,8 @@ public sealed class MediaProductionSession
             Dispatch();
             if (rounds.Count == 0 && running.Count == 0) { State = PlaybackState.Completed; break; }
             var next = running.Count == 0 ? double.PositiveInfinity : running.Min(x => x.End);
-            var waitingForSupply = rounds.SelectMany(x => x).Any(x => x.State == 0 && x.Definition.IsLoading && x.Parents.All(p => p.State == 2));
-            if (waitingForSupply && WaitingMedia == 0) next = Math.Min(next, NextSupply());
+            foreach (var loader in rounds.SelectMany(x => x).Where(x => x.State == 0 && x.Definition.IsLoading && x.Parents.All(p => p.State == 2)))
+                if (WaitingFor(loader.Definition.Resource) == 0) next = Math.Min(next, NextSupply(loader.Definition.Resource));
             if (!double.IsFinite(next)) throw new InvalidOperationException("전처리 시퀀스를 진행할 수 없습니다. 선행 작업과 스테이지 복귀 순서를 확인하세요.");
             if (next > time) { ElapsedSeconds = time; break; }
             if (next <= ElapsedSeconds) throw new InvalidOperationException("전처리 시간 정밀도 범위를 벗어났습니다.");
@@ -109,36 +152,36 @@ public sealed class MediaProductionSession
     }
     public void RunToCompletion()
     {
-        if (options.Infinite) throw new InvalidOperationException("무한 반복은 일괄 계산할 수 없습니다.");
+        if (roundLimit is null) throw new InvalidOperationException("무한 반복은 일괄 계산할 수 없습니다.");
         Advance(double.MaxValue);
     }
     public void Pause() { if (State == PlaybackState.Running) State = PlaybackState.Paused; }
     public void Resume() { if (State == PlaybackState.Paused) State = PlaybackState.Running; }
     public void Stop() { if (State is PlaybackState.Running or PlaybackState.Paused) State = PlaybackState.Stopped; }
 
-    private long Produced(double time)
+    private long Produced(string stage, double time)
     {
-        var batches = SupplyPeriods(time) + (supply.SupplyAtStart ? 1 : 0);
+        var batches = SupplyPeriods(stage, time) + (supply.SupplyAtStart ? 1 : 0);
         var count = batches * supply.BatchSize;
         if (count >= long.MaxValue) throw new InvalidOperationException("전처리 공급 수량 범위를 초과했습니다.");
         return (long)count;
     }
-    private double SupplyPeriods(double time)
+    private double SupplyPeriods(string stage, double time)
     {
-        var ratio = time / supply.IntervalSeconds;
+        var ratio = time / supply.IntervalFor(stage);
         var integer = Math.Round(ratio);
         if (Math.Abs(ratio - integer) <= 2 * Math.Abs(Math.BitIncrement(ratio) - ratio)) ratio = integer;
         return Math.Floor(ratio);
     }
-    private double NextSupply()
+    private double NextSupply(string stage)
     {
-        var next = (SupplyPeriods(ElapsedSeconds) + 1) * supply.IntervalSeconds;
+        var next = (SupplyPeriods(stage, ElapsedSeconds) + 1) * supply.IntervalFor(stage);
         if (next <= ElapsedSeconds || !double.IsFinite(next)) throw new InvalidOperationException("전처리 공급 시간 정밀도 범위를 초과했습니다.");
         return next;
     }
     private void AddRound(long number)
     {
-        if (!options.Infinite && number > options.RepeatCount) return;
+        if (roundLimit is long limit && number > limit) return;
         var jobs = template.Select((op, index) => new Job(op, index, number)).ToArray();
         var map = jobs.ToDictionary(x => x.Definition.Id);
         foreach (var job in jobs)
@@ -164,7 +207,7 @@ public sealed class MediaProductionSession
             .ThenBy(x => x.Round).ThenBy(x => x.Index).ToList();
         foreach (var job in ready)
         {
-            if (job.Resources.Any(busy.Contains) || (job.Definition.IsLoading && WaitingMedia == 0)) continue;
+            if (job.Resources.Any(busy.Contains) || (job.Definition.IsLoading && WaitingFor(job.Definition.Resource) == 0)) continue;
             var op = job.Definition;
             if (op.IsMotion && Math.Abs(op.StartPosition - position[op.Resource]) > 1e-8)
                 throw new InvalidOperationException($"'{op.Name}' 시작 위치가 {op.Resource}의 현재 위치와 다릅니다.");
@@ -172,7 +215,7 @@ public sealed class MediaProductionSession
                 throw new InvalidOperationException($"'{op.Name}' 실행 전에 헤드를 해당 열로 이동해야 합니다.");
             job.Start = ElapsedSeconds; job.End = ElapsedSeconds + op.DurationSeconds;
             if (!double.IsFinite(job.End) || job.End <= job.Start) throw new InvalidOperationException("생산 동작 시간 범위를 초과했습니다.");
-            if (op.IsLoading) consumed++;
+            if (op.IsLoading) consumed[op.Resource]++;
             latestEnds[op.Id] = job.End;
             job.State = 1; job.Parents.Clear(); running.Add(job);
             foreach (var resource in job.Resources) busy.Add(resource);
@@ -209,3 +252,5 @@ public sealed class MediaProductionSession
         return job.Definition.StartPosition + (job.Definition.EndPosition - job.Definition.StartPosition) * fraction;
     }
 }
+
+public sealed record ProductionForecast(long ThroughRound, IReadOnlyList<ScheduledOperation> Operations);
