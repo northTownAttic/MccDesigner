@@ -16,6 +16,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(30) };
     private readonly Stopwatch playbackClock = new();
     private readonly PlaybackSession playback = new();
+    private MediaProductionSession? production;
     private bool draggingTimeline;
     private double playbackElapsedBase;
     private double? previewSeekTime;
@@ -40,8 +41,10 @@ public partial class MainWindow : Window
         vm.PropertyChanged += (_, e) => {
             if (e.PropertyName == nameof(MainViewModel.SimulatorZoom)) ZoomMachineCanvas();
             if (e.PropertyName == nameof(MainViewModel.ScheduledOperations)) operationEditPending = false;
-            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine) or nameof(MainViewModel.RepeatCount) or nameof(MainViewModel.InfiniteRepeat)) ResetPlayback();
-            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.CurrentTime) or nameof(MainViewModel.Machine)) DrawAll();
+            if (e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine) or nameof(MainViewModel.RepeatCount) or nameof(MainViewModel.InfiniteRepeat) or nameof(MainViewModel.SupplyEnabled) or nameof(MainViewModel.SupplyInterval) or nameof(MainViewModel.SupplyBatchSize) or nameof(MainViewModel.SupplyAtStart)) ResetPlayback();
+            if (e.PropertyName == nameof(MainViewModel.ProductionFrame) ||
+                e.PropertyName is nameof(MainViewModel.ScheduledOperations) or nameof(MainViewModel.Machine) ||
+                (e.PropertyName == nameof(MainViewModel.CurrentTime) && !vm.ProductionView)) DrawAll();
         };
         Closed += (_, _) => { timer.Stop(); playbackClock.Stop(); };
         Loaded += (_, _) => { ResizeMachineCanvas(); CenterMachineCanvas(); DrawAll(); };
@@ -88,6 +91,11 @@ public partial class MainWindow : Window
     private void Reset_Click(object sender, RoutedEventArgs e) => ResetPlayback();
     private void Stop_Click(object sender, RoutedEventArgs e)
     {
+        if (production != null)
+        {
+            if (production.State == PlaybackState.Running) SamplePlayback();
+            timer.Stop(); playbackClock.Stop(); production.Stop(); SyncPlayback(); return;
+        }
         if (playback.State == PlaybackState.Running) SamplePlayback();
         timer.Stop(); playbackClock.Stop(); playback.Stop(); SyncPlayback();
     }
@@ -95,18 +103,21 @@ public partial class MainWindow : Window
     {
         draggingTimeline = false;
         if (TimelineCanvas.IsMouseCaptured) TimelineCanvas.ReleaseMouseCapture();
+        production = null; vm.SetProductionFrame(null);
         previewSeekTime = null; playbackElapsedBase = 0;
         timer.Stop(); playbackClock.Reset(); playback.Reset(); SyncPlayback();
     }
     private void Play_Click(object sender, RoutedEventArgs e)
     {
-        if (playback.State == PlaybackState.Running) return;
+        if (playback.State == PlaybackState.Running || production?.State == PlaybackState.Running) return;
         editGeneration++;
         committingEdit = true;
         try
         {
+            SupplyIntervalInput.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            SupplyBatchInput.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
             RepeatCountInput.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-            if (Validation.GetHasError(RepeatCountInput) ||
+            if (Validation.GetHasError(SupplyIntervalInput) || Validation.GetHasError(SupplyBatchInput) || Validation.GetHasError(RepeatCountInput) ||
                 !OperationsGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
                 !OperationsGrid.CommitEdit(DataGridEditingUnit.Row, true))
             {
@@ -116,7 +127,9 @@ public partial class MainWindow : Window
         finally { committingEdit = false; }
         try
         {
-            if (operationEditPending && playback.State == PlaybackState.Paused) ResetPlayback();
+            if (operationEditPending && (playback.State == PlaybackState.Paused || production?.State == PlaybackState.Paused)) ResetPlayback();
+            if (production?.State == PlaybackState.Paused)
+            { production.Resume(); playbackClock.Start(); SyncPlayback(); timer.Start(); return; }
             if (playback.State == PlaybackState.Paused)
             {
                 playback.Resume(); playbackClock.Start();
@@ -127,8 +140,16 @@ public partial class MainWindow : Window
                 vm.RefreshCalculationAfterEdit();
                 operationEditPending = false;
                 if (vm.TotalDuration <= 0) return;
-                playback.Start(vm.ScheduledOperations, vm.Machine, vm.PlaybackOptions, initialTime >= vm.TotalDuration ? 0 : initialTime);
-                playbackElapsedBase = playback.ElapsedSeconds;
+                if (vm.SupplyEnabled)
+                {
+                    production = new MediaProductionSession(vm.Operations.ToList(), vm.Machine, vm.SupplySettings, vm.PlaybackOptions);
+                    playbackElapsedBase = 0;
+                }
+                else
+                {
+                    playback.Start(vm.ScheduledOperations, vm.Machine, vm.PlaybackOptions, initialTime >= vm.TotalDuration ? 0 : initialTime);
+                    playbackElapsedBase = playback.ElapsedSeconds;
+                }
                 playbackClock.Restart();
             }
             SyncPlayback(); timer.Start();
@@ -138,12 +159,24 @@ public partial class MainWindow : Window
     private void Pause_Click(object sender, RoutedEventArgs e) => PausePlayback();
     private void PausePlayback()
     {
+        if (production != null)
+        {
+            if (production.State == PlaybackState.Running) SamplePlayback();
+            timer.Stop(); playbackClock.Stop(); production.Pause(); SyncPlayback(); return;
+        }
         if (playback.State == PlaybackState.Running) SamplePlayback();
         timer.Stop(); playbackClock.Stop(); playback.Pause(); SyncPlayback();
     }
     private void Timer_Tick(object? sender, EventArgs e) => SamplePlayback();
     private void SamplePlayback()
     {
+        if (production != null)
+        {
+            try { production.Advance(playbackElapsedBase + playbackClock.Elapsed.TotalSeconds); }
+            catch (InvalidOperationException error) { production.Stop(); vm.Status = error.Message; }
+            if (production.State != PlaybackState.Running) { timer.Stop(); playbackClock.Stop(); }
+            SyncPlayback(); return;
+        }
         try { playback.Advance(playbackElapsedBase + playbackClock.Elapsed.TotalSeconds); }
         catch (InvalidOperationException error) { playback.Stop(); vm.Status = error.Message; }
         if (playback.State != PlaybackState.Running) { timer.Stop(); playbackClock.Stop(); }
@@ -151,6 +184,14 @@ public partial class MainWindow : Window
     }
     private void SyncPlayback()
     {
+        if (production != null)
+        {
+            vm.PlaybackActive = production.State is PlaybackState.Running or PlaybackState.Paused;
+            vm.SetProductionFrame(production);
+            var productionLabel = production.State switch { PlaybackState.Running => "재생", PlaybackState.Paused => "일시정지", PlaybackState.Stopped => "중지", PlaybackState.Completed => "완료", _ => "대기" };
+            vm.PlaybackProgress = $"전처리 연동 · {productionLabel} · S1 완료 {production.CompletedStage1}회 / S2 완료 {production.CompletedStage2}회 · 누적 {production.ElapsedSeconds:0.0} s";
+            return;
+        }
         if (playback.State == PlaybackState.Ready && previewSeekTime is double preview)
         {
             vm.CurrentTime = preview; vm.PlaybackActive = false;
@@ -169,6 +210,7 @@ public partial class MainWindow : Window
     }
     private void Timeline_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (vm.SupplyEnabled) { vm.Status = "전처리 연동 모드는 공급/소비 이력을 따라 진행합니다. 시간선 탐색은 연동 해제 모드에서 사용할 수 있습니다."; return; }
         if (vm.TotalDuration <= 0) return;
         editGeneration++;
         committingEdit = true;
@@ -219,28 +261,30 @@ public partial class MainWindow : Window
     private void DrawTimeline()
     {
         TimelineCanvas.Children.Clear();
-        var items = vm.ScheduledOperations;
-        var layout = new TimelineLayout(TimelineScrollViewer.ViewportWidth, vm.TotalDuration);
+        var items = vm.DisplayOperations;
+        var origin = vm.TimelineStart;
+        var layout = new TimelineLayout(TimelineScrollViewer.ViewportWidth, vm.DisplayDuration);
         var total = layout.DisplayDuration;
         const double left=TimelineLayout.Left, top=25, rowH=38;
         TimelineCanvas.Width = layout.Width;
         var scale = layout.PixelsPerSecond;
         var step = total <= 20 ? 1 : Math.Ceiling(total/20);
-        for (double t=0; t<=total; t+=step) { var x=left+t*scale; Line(TimelineCanvas,x,15,x,180,"#E2E8F0",1); Text(TimelineCanvas,$"{t:0.#}s",x-12,2,"#475569",10); }
+        for (double t=0; t<=total; t+=step) { var x=left+t*scale; Line(TimelineCanvas,x,15,x,180,"#E2E8F0",1); Text(TimelineCanvas,$"{origin+t:0.#}s",x-12,2,"#475569",10); }
         string[] resources = [MachineAxes.Stage1, MachineAxes.Stage2, MachineAxes.Head];
         for (int i=0;i<resources.Length;i++)
         {
             var y=top+i*rowH; Text(TimelineCanvas,resources[i],5,y+5,"#0F172A",11); Line(TimelineCanvas,left,y+rowH-2,TimelineCanvas.Width-8,y+rowH-2,"#CBD5E1",1);
-            foreach(var op in items.Where(o=>o.RequiredResources.Contains(resources[i])))
+            foreach(var op in items.Where(o=>o.RequiredResources.Contains(resources[i]) && o.EndTime >= origin && o.StartTime <= origin + total))
             {
-                var x=left+op.StartTime*scale; var w=Math.Max(2,op.Duration*scale);
+                var start=Math.Max(origin,op.StartTime); var end=Math.Min(origin+total,op.EndTime);
+                var x=left+(start-origin)*scale; var w=Math.Max(2,(end-start)*scale);
                 var primary = op.Resource == resources[i];
                 var r=new Rectangle { Width=w, Height=22, RadiusX=4, RadiusY=4, Opacity=primary?1:0.45, Fill=Brush(op.Resource==MachineAxes.Head?"#2563EB":op.Resource=="Stage 1"?"#0D9488":"#D97706"), ToolTip=$"{op.Name}\n{op.StartTime:0.###}–{op.EndTime:0.###} s\n점유: {string.Join(", ", op.RequiredResources)}" };
                 Canvas.SetLeft(r,x); Canvas.SetTop(r,y+2); TimelineCanvas.Children.Add(r);
                 if(w>45) Text(TimelineCanvas,primary?op.Name:$"{op.Name} (점유)",x+4,y+5,primary?"White":"#0F172A",10,w-8);
             }
         }
-        var cx=left+vm.CurrentTime*scale; Line(TimelineCanvas,cx,12,cx,150,"#DC2626",2);
+        var cx=left+(vm.CurrentTime-origin)*scale; Line(TimelineCanvas,cx,12,cx,150,"#DC2626",2);
     }
     private void FitMachine_Click(object sender, RoutedEventArgs e)
     {
@@ -283,7 +327,7 @@ public partial class MainWindow : Window
         var settings = vm.Machine;
         var zoom = vm.SimulatorZoom / 100;
         var map = new MachineProjection(settings, width / zoom, height / zoom, zoom);
-        var state = MachineStateEvaluator.Evaluate(vm.ScheduledOperations, vm.CurrentTime, settings);
+        var state = vm.LivePose ?? MachineStateEvaluator.Evaluate(vm.ScheduledOperations, vm.CurrentTime, settings);
         Text(MachineCanvas, "X → (Stage) · Y ↑ (Head) · mm · 고정 갠트리", 6 * zoom, 2 * zoom, "#334155", 10 * zoom);
         foreach (var lane in new[] { MachineAxes.Stage1, MachineAxes.Stage2 })
         {
@@ -303,7 +347,7 @@ public partial class MainWindow : Window
         }
         // All four gantry edges are configured in world mm; none depends on playback.
         Box(settings.GantryXStart, settings.GantryXEnd, settings.GantryYStart, settings.GantryYEnd, "#64748B", .4);
-        var scanning = vm.ScheduledOperations.Any(o => o.RequiresScannerHead && vm.CurrentTime >= o.StartTime && vm.CurrentTime < o.EndTime);
+        var scanning = vm.DisplayOperations.Any(o => o.RequiresScannerHead && vm.CurrentTime >= o.StartTime && vm.CurrentTime < o.EndTime);
         Box(settings.HeadX - settings.HeadWidth / 2, settings.HeadX + settings.HeadWidth / 2,
             state.HeadY - settings.HeadHeight / 2, state.HeadY + settings.HeadHeight / 2, scanning ? "#DC2626" : "#2563EB", 1);
         var axisY = map.Y(map.MinY) + 8 * zoom;

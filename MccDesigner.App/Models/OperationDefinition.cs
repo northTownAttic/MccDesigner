@@ -27,6 +27,7 @@ public sealed class OperationDefinition : INotifyPropertyChanged
     public bool WaitForPrevious { get; set; } = true;
     // A scanning stage moves on X while exclusively reserving the stationary head.
     public bool RequiresScannerHead { get; set; }
+    public bool IsLoading { get; set; }
     public bool IsMotion { get; set; }
     public double StartPosition { get; set; }
     public double EndPosition { get; set; } = 100;

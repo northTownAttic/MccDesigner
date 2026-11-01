@@ -44,6 +44,7 @@
 </DataTemplate></DataGridTemplateColumn.CellEditingTemplate>
 </DataGridTemplateColumn>
 <DataGridCheckBoxColumn Header="이전 완료 대기" ElementStyle="{StaticResource PreviousWaitDisplay}" EditingElementStyle="{StaticResource PreviousWaitEditing}" Binding="{Binding WaitForPrevious, UpdateSourceTrigger=PropertyChanged}" Width="100"/>
+<DataGridCheckBoxColumn Header="미디어 로딩" Binding="{Binding IsLoading, UpdateSourceTrigger=PropertyChanged}" Width="85"/>
 <DataGridCheckBoxColumn Header="헤드 사용" Binding="{Binding RequiresScannerHead, UpdateSourceTrigger=PropertyChanged}" Width="65"/>
 <DataGridCheckBoxColumn Header="이동" Binding="{Binding IsMotion, UpdateSourceTrigger=PropertyChanged}" Width="50"/>
 <DataGridTextColumn Header="시작(mm)" Binding="{Binding StartPosition, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True, StringFormat=0.###}" Width="65"/>
@@ -58,6 +59,18 @@
 <TextBox x:Name="RepeatCountInput" Width="65" Text="{Binding RepeatCount, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}" ToolTip="1회는 단일 실행, 2회 이상은 복귀 위치를 검사합니다."/>
 <CheckBox Content="무한 반복" IsChecked="{Binding InfiniteRepeat}" VerticalAlignment="Center" Margin="8,0"/>
 </WrapPanel>
+<WrapPanel IsEnabled="{Binding CanEditPlayback}" Margin="0,0,0,4">
+<CheckBox Content="전처리 연동" IsChecked="{Binding SupplyEnabled}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+<TextBlock Text="주기(s)" VerticalAlignment="Center"/>
+<TextBox x:Name="SupplyIntervalInput" Width="65" Text="{Binding SupplyInterval, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}"/>
+<TextBlock Text="매/회" VerticalAlignment="Center"/>
+<TextBox x:Name="SupplyBatchInput" Width="45" Text="{Binding SupplyBatchSize, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}"/>
+<CheckBox Content="시작 즉시 첫 공급" IsChecked="{Binding SupplyAtStart}" VerticalAlignment="Center" Margin="8,0"/>
+</WrapPanel>
+<Border Padding="8" Margin="0,0,0,5" CornerRadius="4">
+<Border.Style><Style TargetType="Border"><Setter Property="Background" Value="#E0E7FF"/><Style.Triggers><DataTrigger Binding="{Binding HasWaitingMedia}" Value="True"><Setter Property="Background" Value="#FEF3C7"/></DataTrigger></Style.Triggers></Style></Border.Style>
+<TextBlock Text="{Binding SupplyStatus}" TextWrapping="Wrap" FontWeight="SemiBold" Foreground="#312E81"/>
+</Border>
 <TextBlock Text="{Binding PlaybackProgress}" TextWrapping="Wrap" Foreground="#475569" Margin="0,0,0,5"/>
 <DockPanel Margin="0,0,0,5">
 <Button DockPanel.Dock="Right" Content="화면 맞춤" Click="FitMachine_Click"/>

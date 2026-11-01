@@ -395,4 +395,81 @@ Check("explicit reference notifications update checkbox state and are not saved 
     Assert(changed.Contains(nameof(OperationDefinition.HasExplicitPredecessor)));
     var json=System.Text.Json.JsonSerializer.Serialize(op); Assert(!json.Contains("HasExplicitPredecessor"));
 });
+Check("preprocessor first sheet after interval starts stage1 loading immediately", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=30},new());
+    session.Advance(29); Equal(0,session.ConsumedMedia); session.Advance(30);
+    Equal(1,session.SuppliedMedia); Equal(1,session.ConsumedMedia); Equal(0,session.WaitingMedia);
+    var load=session.VisibleOperations.Single(x=>x.Resource==MachineAxes.Stage1); Equal(30,load.StartTime);
+    session.Advance(60); var load2=session.VisibleOperations.Single(x=>x.Name.StartsWith("Stage 2 Loading")); Equal(60,load2.StartTime);
+});
+Check("batch supply can load both stages at same time", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=30,BatchSize=2},new());
+    session.Advance(30); Equal(2,session.ConsumedMedia);
+    foreach(var load in session.VisibleOperations.Where(x=>x.Name.Contains("Loading"))) Equal(30,load.StartTime);
+});
+Check("supply at start and media waiting count are explicit", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=1,BatchSize=5,SupplyAtStart=true},new());
+    Equal(5,session.SuppliedMedia); Equal(2,session.ConsumedMedia); Equal(3,session.WaitingMedia);
+    session.Advance(1); Equal(8,session.WaitingMedia);
+});
+Check("next stage1 cycle loads before other stage completes previous cycle", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=10},new(){RepeatCount=2},false);
+    session.Advance(40);
+    var load=session.VisibleOperations.Single(x=>x.Name=="Stage 1 Loading [2회]"); Equal(34.5,load.StartTime);
+    Equal(1,session.CompletedStage1); Equal(0,session.CompletedStage2);
+});
+Check("supply-aware single cycle is fully planned with loading wait", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=30},new(),true);
+    session.RunToCompletion(); Assert(session.State==PlaybackState.Completed); Equal(82.25,session.ElapsedSeconds);
+    Equal(1,session.CompletedStage1); Equal(1,session.CompletedStage2); Equal(9,session.VisibleOperations.Count);
+    var pose=session.MachineState; Equal(0,pose.Stage1X); Equal(0,pose.Stage2X); Equal(0,pose.HeadY);
+});
+Check("production pause resume and stop freeze event processing", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(),new());
+    session.Advance(20); session.Pause(); session.Advance(50); Equal(20,session.ElapsedSeconds);
+    session.Resume(); session.Advance(30); Equal(1,session.ConsumedMedia);
+    session.Stop(); session.Advance(60); Equal(30,session.ElapsedSeconds);
+});
+Check("production keeps bounded history during many cycles", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=1},new(){Infinite=true});
+    session.Advance(20000); Assert(session.CompletedStage1>400); Assert(session.RetainedJobCount<=527);
+    Assert(session.WaitingMedia>0); Assert(session.VisibleOperations.Count<=503);
+});
+Check("production requires explicit loading flags and loading roots", () => {
+    var ops=DemoProject.Create(); ops[0].IsLoading=false;
+    Reject(()=>new MediaProductionSession(ops,new(),new(),new()));
+    ops=DemoProject.Create(); ops[1].WaitForPrevious=true;
+    Reject(()=>new MediaProductionSession(ops,new(),new(),new()));
+});
+Check("invalid supply parameters are rejected", () => {
+    Reject(()=>new MediaSupplySettings(){IntervalSeconds=0}.Validate());
+    Reject(()=>new MediaSupplySettings(){IntervalSeconds=double.NaN}.Validate());
+    Reject(()=>new MediaSupplySettings(){BatchSize=0}.Validate());
+});
+Check("supply settings and loading flags survive project save", () => {
+    var json=ProjectSerializer.Serialize(DemoProject.Create(),new(),new(),new(){Enabled=true,IntervalSeconds=12.5,BatchSize=3,SupplyAtStart=true});
+    var copy=ProjectSerializer.DeserializeProject(json); Assert(copy.Supply.Enabled); Equal(12.5,copy.Supply.IntervalSeconds);
+    Equal(3,copy.Supply.BatchSize); Assert(copy.Supply.SupplyAtStart); Assert(copy.Operations[0].IsLoading && copy.Operations[1].IsLoading);
+    var root=System.Text.Json.Nodes.JsonNode.Parse(json)!; root.AsObject().Remove("Supply");
+    Assert(!ProjectSerializer.DeserializeProject(root.ToJsonString()).Supply.Enabled);
+});
+Check("fractional supply intervals do not duplicate or lose boundary arrivals", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=.7},new());
+    session.Advance(2.1); Equal(3,session.SuppliedMedia); Equal(2,session.ConsumedMedia); Equal(1,session.WaitingMedia);
+    session.Advance(7); Equal(10,session.SuppliedMedia);
+});
+Check("single preview skips idle supply events during very long processing", () => {
+    var ops=DemoProject.Create(); ops[3].DurationSeconds=1_000_000;
+    var session=new MediaProductionSession(ops,new(),new(){IntervalSeconds=.001},new(),true);
+    session.RunToCompletion(); Assert(session.State==PlaybackState.Completed); Equal(9,session.VisibleOperations.Count);
+    Assert(session.WaitingMedia>100_000_000);
+});
+Check("production template retains same-resource exclusivity across cycles", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(){IntervalSeconds=1,BatchSize=2},new(){RepeatCount=3});
+    session.Advance(100);
+    foreach(var resource in MachineAxes.Resources) {
+        var jobs=session.VisibleOperations.Where(x=>x.RequiredResources.Contains(resource)).OrderBy(x=>x.StartTime).ToList();
+        for(var i=1;i<jobs.Count;i++) Assert(jobs[i].StartTime>=jobs[i-1].EndTime);
+    }
+});
 Console.WriteLine($"{passed} checks passed.");

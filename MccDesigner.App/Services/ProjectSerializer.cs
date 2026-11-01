@@ -9,18 +9,21 @@ public static class ProjectSerializer
         public int FormatVersion { get; set; }
         public string? AxisModel { get; set; }
         public string? Units { get; set; }
+        public MediaSupplySettings? Supply { get; set; }
         public PlaybackOptions? Playback { get; set; }
         public MachineSettings? Machine { get; set; }
         public List<OperationDefinition>? Operations { get; set; }
     }
     private const string AxisModel = "FixedGantry_StageX_HeadY";
-    public static string Serialize(IReadOnlyList<OperationDefinition> operations, MachineSettings? settings = null, PlaybackOptions? playback = null)
+    public static string Serialize(IReadOnlyList<OperationDefinition> operations, MachineSettings? settings = null, PlaybackOptions? playback = null, MediaSupplySettings? supply = null)
     {
         settings ??= new MachineSettings();
         playback ??= new PlaybackOptions();
         playback.Validate();
+        supply ??= new MediaSupplySettings(); supply.Validate();
+        if (supply.Enabled) new MediaProductionSession(operations, settings, supply, new PlaybackOptions());
         new Scheduler().Calculate(operations, settings);
-        return JsonSerializer.Serialize(new ProjectDocument { FormatVersion = 3, AxisModel = AxisModel, Units = "mm", Machine = settings, Playback = playback,
+        return JsonSerializer.Serialize(new ProjectDocument { FormatVersion = 3, AxisModel = AxisModel, Units = "mm", Machine = settings, Playback = playback, Supply = supply,
             Operations = operations.ToList() }, new JsonSerializerOptions { WriteIndented = true });
     }
     public static List<OperationDefinition> Deserialize(string json) => DeserializeProject(json).Operations;
@@ -32,6 +35,7 @@ public static class ProjectSerializer
         var settings = new MachineSettings();
         var legacyUnits = true;
         var playback = new PlaybackOptions();
+        var supply = new MediaSupplySettings();
         if (document.RootElement.ValueKind == JsonValueKind.Array)
         {
             // Old head-X data has a different physical meaning; never reinterpret it as head-Y.
@@ -54,13 +58,15 @@ public static class ProjectSerializer
                 settings = project.Machine;
                 legacyUnits = false;
             }
+            supply = project.Supply ?? new MediaSupplySettings(); supply.Validate();
             playback = project.Playback ?? new PlaybackOptions();
             playback.Validate();
             operations = project.Operations ?? throw new InvalidOperationException("작업 데이터가 없습니다.");
         }
         new Scheduler().Calculate(operations, settings);
-        return new LoadedProject(operations, settings, legacyUnits, playback);
+        if (supply.Enabled) new MediaProductionSession(operations, settings, supply, new PlaybackOptions());
+        return new LoadedProject(operations, settings, legacyUnits, playback, supply);
     }
 }
 
-public sealed record LoadedProject(List<OperationDefinition> Operations, MachineSettings Machine, bool ImportedLegacyUnits, PlaybackOptions Playback);
+public sealed record LoadedProject(List<OperationDefinition> Operations, MachineSettings Machine, bool ImportedLegacyUnits, PlaybackOptions Playback, MediaSupplySettings Supply);

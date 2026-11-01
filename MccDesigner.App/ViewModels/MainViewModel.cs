@@ -15,6 +15,54 @@ public sealed class MainViewModel : ObservableObject
     private double _currentTime;
     private double _simulatorZoom = 200;
     public double SimulatorZoom { get => _simulatorZoom; set => SetProperty(ref _simulatorZoom, double.IsFinite(value) ? Math.Clamp(value, 100, 400) : 200); }
+    private bool _supplyEnabled = true;
+    private double _supplyInterval = 30;
+    private int _supplyBatchSize = 1;
+    private bool _supplyAtStart;
+    public bool SupplyEnabled { get => _supplyEnabled; set => SetProperty(ref _supplyEnabled, value); }
+    public double SupplyInterval { get => _supplyInterval; set => SetProperty(ref _supplyInterval, value); }
+    public int SupplyBatchSize { get => _supplyBatchSize; set => SetProperty(ref _supplyBatchSize, value); }
+    public bool SupplyAtStart { get => _supplyAtStart; set => SetProperty(ref _supplyAtStart, value); }
+    public MediaSupplySettings SupplySettings => new() { Enabled = SupplyEnabled, IntervalSeconds = SupplyInterval, BatchSize = SupplyBatchSize, SupplyAtStart = SupplyAtStart };
+    public bool ProductionView { get; private set; }
+    public double TimelineStart { get; private set; }
+    public double DisplayDuration => ProductionView ? 150 : TotalDuration;
+    private IReadOnlyList<ScheduledOperation> liveOperations = Array.Empty<ScheduledOperation>();
+    public IReadOnlyList<ScheduledOperation> DisplayOperations => ProductionView ? liveOperations : ScheduledOperations;
+    public MachineState? LivePose { get; private set; }
+    private string _supplyStatus = "전처리 공급 대기 · 첫 공급 30초";
+    private bool _hasWaitingMedia;
+    public string SupplyStatus { get => _supplyStatus; set => SetProperty(ref _supplyStatus, value); }
+    public bool HasWaitingMedia { get => _hasWaitingMedia; set => SetProperty(ref _hasWaitingMedia, value); }
+    private MediaProductionSession? displayedSession;
+    private int displayedVersion = -1;
+    public void SetProductionFrame(MediaProductionSession? session)
+    {
+        ProductionView = session != null;
+        var changed = !ReferenceEquals(session, displayedSession) || session?.Version != displayedVersion;
+        if (changed) liveOperations = session?.VisibleOperations ?? Array.Empty<ScheduledOperation>();
+        displayedSession = session; displayedVersion = session?.Version ?? -1;
+        LivePose = session?.MachineState;
+        TimelineStart = session is null ? 0 : Math.Max(0, session.ElapsedSeconds - 120);
+        if (session != null)
+        {
+            HasWaitingMedia = session.WaitingMedia > 0;
+            SupplyStatus = $"전처리부 · 공급 {session.SuppliedMedia}매 / 전달 {session.ConsumedMedia}매 · " +
+                (HasWaitingMedia ? $"미디어 대기 중 {session.WaitingMedia}매" : "미디어 공급 대기 (0매)") +
+                (session.LoadingStages.Length > 0 ? $" · {session.LoadingStages} 로딩 중" : "");
+            if (changed) { OperationEndTimes = session.LatestEndTimes.ToDictionary(x => x.Key, x => x.Value); OnPropertyChanged(nameof(OperationEndTimes)); }
+            CurrentTime = session.ElapsedSeconds;
+        }
+        else
+        {
+            HasWaitingMedia = false;
+            SupplyStatus = SupplyEnabled ? $"전처리 공급 대기 · {SupplyInterval:0.###}초마다 {SupplyBatchSize}매" + (SupplyAtStart ? " · 시작 즉시 첫 공급" : "") : "전처리 연동 해제";
+            OperationEndTimes = ScheduledOperations.ToDictionary(x => x.Id, x => x.EndTime);
+            OnPropertyChanged(nameof(OperationEndTimes));
+        }
+        OnPropertyChanged(nameof(ProductionFrame));
+    }
+    public int ProductionFrame => 0;
     private int _repeatCount = 1;
     private bool _infiniteRepeat;
     private bool _playbackActive;
@@ -134,14 +182,20 @@ public sealed class MainViewModel : ObservableObject
     private void Calculate()
     {
         RefreshPredecessorChoices();
-        try { ScheduledOperations = _scheduler.Calculate(Operations.ToList(), Machine); CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 총 {TotalDuration:0.###}초 (순차 합계 {Operations.Sum(x => x.DurationSeconds):0.###}초)"; }
+        try { SupplySettings.Validate();
+            if (SupplyEnabled)
+            {
+                var preview = new MediaProductionSession(Operations.ToList(), Machine, SupplySettings, new PlaybackOptions(), true);
+                preview.RunToCompletion(); ScheduledOperations = preview.VisibleOperations;
+            }
+            else ScheduledOperations = _scheduler.Calculate(Operations.ToList(), Machine); CurrentTime = 0; Status = $"계산 완료: {ScheduledOperations.Count}개 작업, 총 {TotalDuration:0.###}초 (순차 합계 {Operations.Sum(x => x.DurationSeconds):0.###}초)"; }
         catch (Exception ex) { ScheduledOperations = Array.Empty<ScheduledOperation>(); CurrentTime = 0; Status = $"계산 오류: {ex.Message}"; }
     }
     private void SaveProject()
     {
         var dlg = new SaveFileDialog { Filter = "MCC 프로젝트 (*.json)|*.json", FileName = "MccProject.json" };
         if (dlg.ShowDialog() != true) return;
-        try { File.WriteAllText(dlg.FileName, ProjectSerializer.Serialize(Operations.ToList(), Machine, PlaybackOptions)); Status = $"저장 완료: {dlg.FileName}"; }
+        try { File.WriteAllText(dlg.FileName, ProjectSerializer.Serialize(Operations.ToList(), Machine, PlaybackOptions, SupplySettings)); Status = $"저장 완료: {dlg.FileName}"; }
         catch (Exception ex) { Status = $"저장 실패: {ex.Message}"; MessageBox.Show(Status); }
     }
     private void LoadProject()
@@ -150,7 +204,10 @@ public sealed class MainViewModel : ObservableObject
         if (dlg.ShowDialog() != true) return;
         try {
             var loaded = ProjectSerializer.DeserializeProject(File.ReadAllText(dlg.FileName));
-            var calculated = _scheduler.Calculate(loaded.Operations, loaded.Machine);
+            IReadOnlyList<ScheduledOperation> calculated;
+            if (loaded.Supply.Enabled) { var preview = new MediaProductionSession(loaded.Operations, loaded.Machine, loaded.Supply, new PlaybackOptions(), true); preview.RunToCompletion(); calculated = preview.VisibleOperations; }
+            else calculated = _scheduler.Calculate(loaded.Operations, loaded.Machine);
+            SupplyEnabled = loaded.Supply.Enabled; SupplyInterval = loaded.Supply.IntervalSeconds; SupplyBatchSize = loaded.Supply.BatchSize; SupplyAtStart = loaded.Supply.SupplyAtStart;
             RepeatCount = loaded.Playback.RepeatCount; InfiniteRepeat = loaded.Playback.Infinite;
             Machine = loaded.Machine; OnPropertyChanged(nameof(Machine)); OnPropertyChanged(nameof(AxisHint));
             RefreshPredecessorChoices(loaded.Operations);
