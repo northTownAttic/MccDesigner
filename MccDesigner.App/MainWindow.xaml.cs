@@ -346,15 +346,26 @@ public partial class MainWindow : Window
             var position = lane == MachineAxes.Stage1 ? state.Stage1X : state.Stage2X;
             var rail = MachineGeometry.Rail(settings, lane);
             var stage = MachineGeometry.Stage(settings, lane, position);
+            var media = vm.MediaStateFor(lane);
+            var mediaLabel = StageMediaEvaluator.Label(media);
             var railName = lane == MachineAxes.Stage1 ? "Rail 1" : "Rail 2";
             Box(rail.XStart, rail.XEnd, rail.YStart, rail.YEnd, "#CBD5E1", 1, railName);
             Line(MachineCanvas, map.X(rail.XStart), map.Y(y), map.X(rail.XEnd), map.Y(y), "#64748B", 1);
             Box(stage.XStart, stage.XEnd, stage.YStart, stage.YEnd,
-                lane == MachineAxes.Stage1 ? "#0D9488" : "#D97706", 1, lane);
+                lane == MachineAxes.Stage1 ? "#0D9488" : "#D97706", media == StageMediaState.Empty ? .35 : 1, lane + " · " + mediaLabel);
+            if (media != StageMediaState.Empty)
+            {
+                var sheet = new Rectangle { Width = stage.Width * map.Scale * .7, Height = stage.Height * map.Scale * .65,
+                    Fill = Brush("#FDE68A"), Stroke = Brush("#92400E"), StrokeThickness = zoom,
+                    Opacity = media == StageMediaState.Loading ? .5 : media == StageMediaState.Unloading ? .65 : 1,
+                    ToolTip = lane + " · " + mediaLabel };
+                Canvas.SetLeft(sheet, map.X(position - stage.Width * .35));
+                Canvas.SetTop(sheet, map.Y(y + stage.Height * .325)); MachineCanvas.Children.Add(sheet);
+            }
             Line(MachineCanvas, map.X(position), map.Y(stage.YStart), map.X(position), map.Y(stage.YEnd), "White", 1);
             Text(MachineCanvas, $"{railName}\nY={y:0.###}", 2 * zoom, map.Y(y) - 10 * zoom, "#0F172A", 9 * zoom, 62 * zoom);
-            Text(MachineCanvas, lane, map.X(position) - 24 * zoom, map.Y(stage.YEnd) - 13 * zoom,
-                "#0F172A", 10 * zoom, 90 * zoom);
+            Text(MachineCanvas, lane + " · " + mediaLabel, map.X(position) - 40 * zoom, map.Y(stage.YEnd) - 13 * zoom,
+                media == StageMediaState.Empty ? "#64748B" : "#0F172A", 10 * zoom, 190 * zoom);
         }
         // All four gantry edges are configured in world mm; none depends on playback.
         Box(settings.GantryXStart, settings.GantryXEnd, settings.GantryYStart, settings.GantryYEnd, "#64748B", .4);

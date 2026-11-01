@@ -552,4 +552,65 @@ Check("per-lane intervals survive save and older shared interval becomes each la
     root["Supply"]!["IntervalSeconds"]=30;
     var legacy=ProjectSerializer.DeserializeProject(root.ToJsonString()); Equal(30,legacy.Supply.Stage1IntervalSeconds); Equal(30,legacy.Supply.Stage2IntervalSeconds);
 });
+Check("stage media states follow loading and unloading completion, including backward seeking", () => {
+    var load=Work(duration:1); load.IsLoading=true;
+    var hold=Work(duration:2); var unload=Work(duration:1); unload.IsUnloading=true;
+    var home=Work(duration:1); var schedule=scheduler.Calculate([load,hold,unload,home]);
+    Assert(StageMediaEvaluator.Evaluate(schedule,MachineAxes.Stage1,.5)==StageMediaState.Loading);
+    Assert(StageMediaEvaluator.Evaluate(schedule,MachineAxes.Stage1,1)==StageMediaState.Loaded);
+    Assert(StageMediaEvaluator.Evaluate(schedule,MachineAxes.Stage1,2)==StageMediaState.Loaded);
+    Assert(StageMediaEvaluator.Evaluate(schedule,MachineAxes.Stage1,3)==StageMediaState.Unloading);
+    Assert(StageMediaEvaluator.Evaluate(schedule,MachineAxes.Stage1,4)==StageMediaState.Empty);
+    Assert(StageMediaEvaluator.Evaluate(schedule,MachineAxes.Stage1,2)==StageMediaState.Loaded);
+});
+Check("stages have separate media presence", () => {
+    var load1=Work(duration:1); load1.IsLoading=true; var hold1=Work(duration:5);
+    var load2=Work(MachineAxes.Stage2,3); load2.IsLoading=true; load2.WaitForPrevious=false;
+    var r=scheduler.Calculate([load1,hold1,load2]);
+    Assert(StageMediaEvaluator.Evaluate(r,MachineAxes.Stage1,2)==StageMediaState.Loaded);
+    Assert(StageMediaEvaluator.Evaluate(r,MachineAxes.Stage2,2)==StageMediaState.Loading);
+    Assert(StageMediaEvaluator.Evaluate(r,MachineAxes.Stage2,3)==StageMediaState.Loaded);
+});
+Check("legacy unloading fallback empties a stage at its final operation", () => {
+    var load=Work(duration:1); load.IsLoading=true;
+    var r=scheduler.Calculate([load,Work(duration:2)]);
+    Assert(StageMediaEvaluator.Evaluate(r,MachineAxes.Stage1,2)==StageMediaState.Loaded);
+    Assert(StageMediaEvaluator.Evaluate(r,MachineAxes.Stage1,3)==StageMediaState.Empty);
+});
+Check("production media state distinguishes loaded, unloading and empty stage", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(),new(){RepeatCount=2});
+    Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Empty);
+    session.Advance(30); Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Loading);
+    session.Advance(40); Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Loaded); Assert(session.MediaStateFor(MachineAxes.Stage2)==StageMediaState.Loaded);
+    session.Advance(52); Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Unloading);
+    session.Advance(55); Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Empty); Assert(session.MediaStateFor(MachineAxes.Stage2)==StageMediaState.Loaded);
+    session.Advance(60); Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Loading);
+});
+Check("explicit unload clears media before later return-home motion finishes", () => {
+    var ops=DemoProject.Create(); ops[7].IsUnloading=false;
+    var unload=Work(duration:1); unload.IsUnloading=true; unload.PredecessorId=ops[3].Id;
+    ops.Insert(7,unload);
+    var session=new MediaProductionSession(ops,new(),new(),new());
+    session.Advance(51.5); Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Unloading);
+    session.Advance(52.5); Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Empty);
+    Assert(session.MachineState.Stage1X>0);
+});
+Check("forecast preserves live media presence", () => {
+    var session=new MediaProductionSession(DemoProject.Create(),new(),new(),new(){Infinite=true});
+    session.Advance(40); session.Forecast();
+    Assert(session.MediaStateFor(MachineAxes.Stage1)==StageMediaState.Loaded);
+    Assert(session.MediaStateFor(MachineAxes.Stage2)==StageMediaState.Loaded);
+});
+Check("unloading metadata survives scheduling and project roundtrip", () => {
+    var ops=DemoProject.Create(); var copy=ProjectSerializer.Deserialize(ProjectSerializer.Serialize(ops));
+    Assert(copy[7].IsUnloading && copy[8].IsUnloading);
+    var r=scheduler.Calculate(copy); Assert(r[7].IsUnloading); Assert(r[0].IsLoading);
+    var root=System.Text.Json.Nodes.JsonNode.Parse(ProjectSerializer.Serialize(ops))!;
+    foreach(var op in root["Operations"]!.AsArray()) op!.AsObject().Remove("IsUnloading");
+    Assert(!ProjectSerializer.Deserialize(root.ToJsonString())[7].IsUnloading);
+});
+Check("invalid media flags are rejected", () => {
+    var op=Work(); op.IsLoading=true; op.IsUnloading=true; Reject(()=>scheduler.Calculate([op]));
+    op=Work(MachineAxes.Head); op.IsUnloading=true; Reject(()=>scheduler.Calculate([op]));
+});
 Console.WriteLine($"{passed} checks passed.");

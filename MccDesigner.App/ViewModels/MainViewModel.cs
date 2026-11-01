@@ -36,6 +36,10 @@ public sealed class MainViewModel : ObservableObject
     public double DisplayDuration => SupplyEnabled && plannedOperations.Count > 0
         ? Math.Max(1, plannedOperations.Max(x => x.EndTime) - TimelineStart) : TotalDuration;
     public IReadOnlyList<ScheduledOperation> DisplayOperations => SupplyEnabled && plannedOperations.Count > 0 ? plannedOperations : ScheduledOperations;
+    private StageMediaState? liveStage1Media, liveStage2Media;
+    public StageMediaState MediaStateFor(string stage) => (stage == MachineAxes.Stage1 ? liveStage1Media : liveStage2Media)
+        ?? StageMediaEvaluator.Evaluate(ScheduledOperations, stage, CurrentTime);
+    public string StageMediaSummary => $"Stage 1: {StageMediaEvaluator.Label(MediaStateFor(MachineAxes.Stage1))} · Stage 2: {StageMediaEvaluator.Label(MediaStateFor(MachineAxes.Stage2))}";
     public MachineState? LivePose { get; private set; }
     private string _supplyStatus = "전처리 공급 대기 · 첫 공급 30초";
     private bool _hasWaitingMedia;
@@ -56,6 +60,7 @@ public sealed class MainViewModel : ObservableObject
         }
         displayedSession = session; displayedVersion = session?.Version ?? -1;
         LivePose = session?.MachineState;
+        liveStage1Media = session?.MediaStateFor(MachineAxes.Stage1); liveStage2Media = session?.MediaStateFor(MachineAxes.Stage2);
         if (session is null || completeProductionPlan) TimelineStart = 0;
         if (session != null)
         {
@@ -78,6 +83,7 @@ public sealed class MainViewModel : ObservableObject
             OperationEndTimes = ScheduledOperations.ToDictionary(x => x.Id, x => x.EndTime);
             OnPropertyChanged(nameof(OperationEndTimes));
         }
+        OnPropertyChanged(nameof(StageMediaSummary));
         OnPropertyChanged(nameof(ProductionFrame));
     }
     public int ProductionFrame => 0;
@@ -107,11 +113,12 @@ public sealed class MainViewModel : ObservableObject
             OperationEndTimes = value.ToDictionary(operation => operation.Id, operation => operation.EndTime);
             OnPropertyChanged(nameof(OperationEndTimes));
             OnPropertyChanged(nameof(TotalDuration));
+            OnPropertyChanged(nameof(StageMediaSummary));
         }
     }
     public OperationDefinition? SelectedOperation { get => _selectedOperation; set { SetProperty(ref _selectedOperation, value); RefreshSelectionCommands(); } }
     public string Status { get => _status; set => SetProperty(ref _status, value); }
-    public double CurrentTime { get => _currentTime; set { if (SetProperty(ref _currentTime, value)) OnPropertyChanged(nameof(CurrentTimeLabel)); } }
+    public double CurrentTime { get => _currentTime; set { if (SetProperty(ref _currentTime, value)) { OnPropertyChanged(nameof(CurrentTimeLabel)); OnPropertyChanged(nameof(StageMediaSummary)); } } }
     public string CurrentTimeLabel => $"재생 시간: {CurrentTime:0.0} s";
     public double TotalDuration => ScheduledOperations.Count == 0 ? 0 : ScheduledOperations.Max(x => x.EndTime);
     public int OperationCount => Operations.Count;

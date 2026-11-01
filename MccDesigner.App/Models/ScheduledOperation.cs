@@ -8,6 +8,8 @@ public sealed class ScheduledOperation
     public double StartTime { get; init; }
     public double EndTime { get; init; }
     public double Duration => EndTime - StartTime;
+    public bool IsLoading { get; init; }
+    public bool IsUnloading { get; init; }
     public bool IsMotion { get; init; }
     public double StartPosition { get; init; }
     public double EndPosition { get; init; }

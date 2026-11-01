@@ -26,6 +26,7 @@ public sealed class MediaProductionSession
     private Job? headTail;
     private readonly List<Job> running = new();
     private readonly HashSet<string> busy = new();
+    private readonly Dictionary<string, bool> mediaOnStage = new() { [MachineAxes.Stage1] = false, [MachineAxes.Stage2] = false };
     private readonly Dictionary<string, double> position = new();
     private readonly Queue<ScheduledOperation> history = new();
     private readonly bool retainFullPreview;
@@ -51,6 +52,13 @@ public sealed class MediaProductionSession
     public int Version { get; private set; }
     public int RetainedJobCount => rounds.Sum(x => x.Length) + history.Count;
     public IReadOnlyList<ScheduledOperation> VisibleOperations => history.Concat(running.Select(Snapshot)).OrderBy(x => x.StartTime).ToArray();
+    public StageMediaState MediaStateFor(string stage)
+    {
+        var job = running.FirstOrDefault(x => x.Definition.Resource == stage);
+        if (job?.Definition.IsLoading == true) return StageMediaState.Loading;
+        if (job?.Definition.IsUnloading == true && mediaOnStage[stage]) return StageMediaState.Unloading;
+        return mediaOnStage[stage] ? StageMediaState.Loaded : StageMediaState.Empty;
+    }
     public MachineState MachineState => new(Sample(MachineAxes.Stage1), Sample(MachineAxes.Stage2), Sample(MachineAxes.Head));
 
     public MediaProductionSession(IReadOnlyList<OperationDefinition> operations, MachineSettings machine,
@@ -66,7 +74,7 @@ public sealed class MediaProductionSession
         template = operations.Select(op => new OperationDefinition { Id = op.Id, Name = op.Name, Resource = op.Resource,
             DurationSeconds = op.DurationSeconds, IsMotion = op.IsMotion, StartPosition = op.StartPosition,
             EndPosition = op.EndPosition, WaitForPrevious = op.WaitForPrevious, RequiresScannerHead = op.RequiresScannerHead,
-            PredecessorId = op.PredecessorId, IsLoading = op.IsLoading }).ToList();
+            PredecessorId = op.PredecessorId, IsLoading = op.IsLoading, IsUnloading = op.IsUnloading }).ToList();
         var baseline = validated;
         foreach (var stage in MachineAxes.Resources.Take(2))
         {
@@ -101,6 +109,7 @@ public sealed class MediaProductionSession
         highestRound = source.highestRound; completed1 = source.completed1; completed2 = source.completed2;
         ElapsedSeconds = source.ElapsedSeconds; State = PlaybackState.Running; Version = source.Version;
         foreach (var (key, value) in source.consumed) consumed[key] = value;
+        foreach (var (key, value) in source.mediaOnStage) mediaOnStage[key] = value;
         foreach (var (key, value) in source.position) position[key] = value;
         foreach (var (key, value) in source.latestEnds) latestEnds[key] = value;
         busy.UnionWith(source.busy);
@@ -227,6 +236,14 @@ public sealed class MediaProductionSession
         job.State = 2; running.Remove(job);
         foreach (var resource in job.Resources) busy.Remove(resource);
         if (job.Definition.IsMotion) position[job.Definition.Resource] = job.Definition.EndPosition;
+        if (job.Definition.Resource != MachineAxes.Head)
+        {
+            var stage = job.Definition.Resource;
+            if (job.Definition.IsLoading) mediaOnStage[stage] = true;
+            if (job.Definition.IsUnloading) mediaOnStage[stage] = false;
+            if (job.Definition.Id == stageOrder[stage][^1] && !template.Any(x => x.Resource == stage && x.IsUnloading))
+                mediaOnStage[stage] = false;
+        }
         history.Enqueue(Snapshot(job)); Version++;
         if (job.Definition.Resource != MachineAxes.Head && job.Definition.Id == stageOrder[job.Definition.Resource][^1])
         {
@@ -242,6 +259,7 @@ public sealed class MediaProductionSession
     private ScheduledOperation Snapshot(Job job) => new() { Id = job.Definition.Id,
         Name = $"{job.Definition.Name} [{job.Round}회]", Resource = job.Definition.Resource,
         StartTime = job.Start, EndTime = job.End, IsMotion = job.Definition.IsMotion,
+        IsLoading = job.Definition.IsLoading, IsUnloading = job.Definition.IsUnloading,
         StartPosition = job.Definition.StartPosition, EndPosition = job.Definition.EndPosition,
         RequiredResources = job.Resources, RequiresScannerHead = job.Definition.RequiresScannerHead };
     private double Sample(string resource)

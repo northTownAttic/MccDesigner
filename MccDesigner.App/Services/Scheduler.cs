@@ -19,6 +19,9 @@ public sealed class Scheduler
                 op.EndPosition < (op.Resource == MachineAxes.Head ? settings.HeadYMin : settings.StageXMin) ||
                 op.EndPosition > (op.Resource == MachineAxes.Head ? settings.HeadYMax : settings.StageXMax))))
                 throw new InvalidOperationException("축 위치(mm)는 설비 설정의 해당 X/Y 이동 범위 안이어야 합니다.");
+            if (op.IsLoading && op.IsUnloading) throw new InvalidOperationException($"'{op.Name}'은 로딩과 언로딩을 동시에 지정할 수 없습니다.");
+            if ((op.IsLoading || op.IsUnloading) && op.Resource == MachineAxes.Head)
+                throw new InvalidOperationException("로딩/언로딩 표시는 스테이지 작업에만 지정하세요.");
             if (op.Resource == MachineAxes.Head && op.RequiresScannerHead)
                 throw new InvalidOperationException("헤드 사용은 스테이지의 스캔 작업에만 선택하세요.");
             if (string.IsNullOrWhiteSpace(op.Name)) throw new InvalidOperationException("작업 이름은 비워 둘 수 없습니다.");
@@ -57,7 +60,7 @@ public sealed class Scheduler
             var end = start + op.DurationSeconds;
             if (!double.IsFinite(end) || end <= start) throw new InvalidOperationException("작업 시간이 너무 크거나 시간 정밀도 범위를 벗어났습니다.");
             scheduled[index] = new ScheduledOperation { Id = op.Id, Name = op.Name, Resource = op.Resource,
-                RequiredResources = Array.AsReadOnly(resources), StartTime = start, EndTime = end, IsMotion = op.IsMotion,
+                RequiredResources = Array.AsReadOnly(resources), StartTime = start, EndTime = end, IsMotion = op.IsMotion, IsLoading = op.IsLoading, IsUnloading = op.IsUnloading,
                 StartPosition = op.StartPosition, EndPosition = op.EndPosition, RequiresScannerHead = op.RequiresScannerHead };
             foreach (var resource in resources)
             {
