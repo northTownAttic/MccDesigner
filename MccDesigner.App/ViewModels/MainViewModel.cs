@@ -19,7 +19,7 @@ public sealed class MainViewModel : ObservableObject
     private double _supplyInterval = 30;
     private int _supplyBatchSize = 1;
     private bool _supplyAtStart;
-    public bool SupplyEnabled { get => _supplyEnabled; set => SetProperty(ref _supplyEnabled, value); }
+    public bool SupplyEnabled { get => _supplyEnabled; set { if (SetProperty(ref _supplyEnabled, value)) RefreshPredecessorChoices(); } }
     public double SupplyInterval { get => _supplyInterval; set => SetProperty(ref _supplyInterval, value); }
     public int SupplyBatchSize { get => _supplyBatchSize; set => SetProperty(ref _supplyBatchSize, value); }
     public bool SupplyAtStart { get => _supplyAtStart; set => SetProperty(ref _supplyAtStart, value); }
@@ -76,6 +76,7 @@ public sealed class MainViewModel : ObservableObject
     public MachineSettings Machine { get; private set; } = new();
     public string AxisHint => $"위치 단위: mm · Stage=X / Head=Y · 1열 Y={Machine.Stage1Y:0.###} / 2열 Y={Machine.Stage2Y:0.###}";
     public RelayCommand EditMachineCommand { get; }
+    public IReadOnlyDictionary<Guid, string> DependencyLabels { get; private set; } = new Dictionary<Guid, string>();
     public ObservableCollection<DependencyChoice> PredecessorChoices { get; } = [new(Guid.Empty, "기본 (이전 완료 대기 설정)")];
     public ObservableCollection<OperationDefinition> Operations { get; } = new();
     public IReadOnlyDictionary<Guid, double> OperationEndTimes { get; private set; } = new Dictionary<Guid, double>();
@@ -162,6 +163,16 @@ public sealed class MainViewModel : ObservableObject
             if (source[i].Id != Guid.Empty) labels.TryAdd(source[i].Id, $"{i + 1}. {source[i].Name}");
         foreach (var op in source.Where(op => op.HasExplicitPredecessor))
             labels.TryAdd(op.PredecessorId, $"누락된 작업 ({op.PredecessorId.ToString()[..8]})");
+        var summaries = new Dictionary<Guid, string>();
+        for (var i = 0; i < source.Count; i++)
+        {
+            var op = source[i];
+            summaries[op.Id] = op.HasExplicitPredecessor ? labels[op.PredecessorId]
+                : op.WaitForPrevious && i > 0 ? $"이전 → {i}. {source[i - 1].Name}"
+                : SupplyEnabled && op.IsLoading ? "미디어 공급 + 스테이지 준비"
+                : "없음 (자원만 대기)";
+        }
+        DependencyLabels = summaries; OnPropertyChanged(nameof(DependencyLabels));
         // Retain choice instances and dangling references so UI refresh cannot silently erase a dependency.
         foreach (var choice in PredecessorChoices.ToList())
             if (!labels.ContainsKey(choice.Id)) PredecessorChoices.Remove(choice);

@@ -472,4 +472,31 @@ Check("production template retains same-resource exclusivity across cycles", () 
         for(var i=1;i<jobs.Count;i++) Assert(jobs[i].StartTime>=jobs[i-1].EndTime);
     }
 });
+Check("screenshot cross-stage previous wait reproduces delay and explicit dependencies remove it", () => {
+    var m=new MachineSettings(){StageXMax=2000,HeadYMax=1000,Stage2Y=1000,GantryYEnd=1015};
+    var ops=new List<OperationDefinition>
+    {
+        new(){Name="Stage 1 Loading",Resource=MachineAxes.Stage1,DurationSeconds=1,IsLoading=true,WaitForPrevious=false},
+        Move(MachineAxes.Stage1,2,0,260),
+        new(){Name="Stage 2 Loading",Resource=MachineAxes.Stage2,DurationSeconds=1,IsLoading=true,WaitForPrevious=false},
+        Move(MachineAxes.Stage2,2,0,260),
+        Move(MachineAxes.Stage1,3.8,260,800),Move(MachineAxes.Stage1,.7,800,260),Move(MachineAxes.Stage1,3.8,260,800),
+        Move(MachineAxes.Head,1.7,0,1000),Move(MachineAxes.Stage1,1,800,1600),Move(MachineAxes.Stage1,2,1600,0),
+        Move(MachineAxes.Stage2,3.8,260,800),Move(MachineAxes.Stage2,.7,800,260),Move(MachineAxes.Stage2,3.8,260,800),
+        Move(MachineAxes.Head,1.7,1000,0),Move(MachineAxes.Stage2,1,800,1600),Move(MachineAxes.Stage2,2,1600,0)
+    };
+    foreach(var i in new[]{4,6,10,12}) ops[i].RequiresScannerHead=true;
+    ops[8].PredecessorId=ops[6].Id; ops[14].PredecessorId=ops[12].Id;
+    var original=new MediaProductionSession(ops,m,new(),new(),true); original.RunToCompletion();
+    Equal(63,original.VisibleOperations.Single(x=>x.Id==ops[4].Id).StartTime);
+    Equal(74.3,original.VisibleOperations.Single(x=>x.Id==ops[10].Id).StartTime);
+    Equal(85.6,original.ElapsedSeconds);
+    ops[4].PredecessorId=ops[1].Id; ops[10].PredecessorId=ops[7].Id;
+    var fixedPlan=new MediaProductionSession(ops,m,new(),new(),true); fixedPlan.RunToCompletion();
+    Equal(33,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[4].Id).StartTime);
+    Equal(63,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[10].Id).StartTime);
+    Equal(41.3,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[7].Id).StartTime);
+    Equal(41.3,fixedPlan.VisibleOperations.Single(x=>x.Id==ops[8].Id).StartTime);
+    Equal(74.3,fixedPlan.ElapsedSeconds);
+});
 Console.WriteLine($"{passed} checks passed.");
